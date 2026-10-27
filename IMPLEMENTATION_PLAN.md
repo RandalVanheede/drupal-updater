@@ -1,0 +1,110 @@
+# Drupal Updater TUI — Implementation Plan
+
+A Terminal User Interface (TUI) application designed to manage and batch-update local Drupal projects. Built in **Go** with the [Bubbletea](https://github.com/charmbracelet/bubbletea) framework.
+
+## Architecture
+
+```
+drupal-updater/
+├── main.go                 # Entrypoint: loads config, discovers projects, starts TUI
+├── config/
+│   └── config.go           # YAML config loading & per-project defaults
+├── discovery/
+│   └── discovery.go        # Auto-detects Drupal/DDEV projects in base folder
+├── executor/
+│   └── executor.go         # Runs shell commands per project in goroutines
+├── ui/
+│   └── ui.go               # Bubbletea TUI (list, input, running views)
+├── go.mod
+├── go.sum
+└── IMPLEMENTATION_PLAN.md  # This file
+```
+
+## Configuration
+
+Config file location: `~/.config/drupal-updater/config.yaml`
+
+```yaml
+base_folder: ~/projects
+
+projects:
+  my-drupal-site:
+    git_start_branch: main              # default: master
+    git_new_branch_pattern: "hotfix/*"  # * is replaced with user input
+    ignored_packages:
+      - drupal/some-module
+    commands:                           # override the default command flow
+      - git pull --rebase --autostash
+      - ddev start
+      - ddev composer install
+      - ddev drush deploy -y
+      - ddev composer update 'drupal/core-*' --with-all-dependencies
+      - ddev drush updb -y
+      - ddev drush cex -y
+      - ddev stop
+```
+
+### Defaults
+
+If a project has no config entry, these defaults apply:
+
+| Setting                | Default                                                                                     |
+|------------------------|---------------------------------------------------------------------------------------------|
+| `git_start_branch`     | `master`                                                                                    |
+| `git_new_branch_pattern` | `hotfix/*`                                                                                |
+| `commands`             | `git pull`, `ddev start`, `ddev composer install`, `ddev drush deploy -y`, `ddev composer update 'drupal/core-*' 'symfony/*' 'twig/*' --with-all-dependencies`, `ddev drush updb -y`, `ddev drush cex -y` |
+
+## Auto-Detection
+
+On startup the app scans `base_folder` for subdirectories containing either:
+- A `.ddev/` directory, **or**
+- A `composer.json` file
+
+Each match becomes a selectable project in the TUI.
+
+## TUI Flow
+
+1. **List View** — Scrollable list of detected projects with checkboxes. Toggle individual projects with `space`/`enter`, toggle all with `a`, start update with `u`.
+2. **Input View** — If any selected project's branch pattern contains `*`, the user is prompted to type a variable (e.g. ticket number). Press `enter` to confirm or `esc` to go back.
+3. **Running View** — Shows live status per project:
+   - `IDLE` (grey) — not started
+   - `RUNNING` (yellow) — commands in progress, shows current command
+   - `SUCCESS` (green) — all commands completed
+   - `FAILED` (red) — a command exited non-zero, shows error output
+
+## Execution Engine
+
+- Each selected project runs in its own **goroutine**.
+- Commands execute sequentially via `sh -c` (supports quotes, globs, pipes).
+- Before the user's command list, the engine prepends:
+  1. `git checkout <start_branch>`
+  2. `git pull --rebase --autostash`
+  3. `git checkout -b <new_branch>` (if branch variable was provided)
+- On any non-zero exit code the project is marked **FAILED** and remaining commands are aborted.
+- stdout/stderr are captured and shown in the TUI for debugging.
+
+## Error Handling
+
+- **Exit code != 0** → failure. The project turns red. The user must fix it manually.
+- Remaining commands for that project are **aborted** (not continued).
+- Other projects continue independently.
+
+## Claude mode (default)
+
+Each project's update runs in a detached tmux session (`du-<project>`) with `claude --model sonnet`.
+The app only starts the session, waits for `~/.config/drupal-updater/runs/<project>/result.json`, verifies the
+repo is on the temp branch, and cleans up on failure. Attach with `tmux -L drupal-updater attach -t du-<project>` (private tmux socket; tmux is bundled in the .app by `scripts/bundle-tmux.sh`).
+
+```yaml
+mode: claude                    # or "classic" (shell commands + auto-heal in Go)
+claude_model: sonnet            # always passed via --model
+claude_prompt: "..."            # template; default is executor.DefaultClaudePrompt
+                                # placeholders: {{project}} {{path}} {{start_branch}} {{temp_branch}} {{commands}} {{result_file}}
+claude_allowed_tools: []        # default: Read Grep Glob Edit Write, Bash(git|ddev|composer|drush|sleep *)
+claude_permission_mode: dontAsk # unlisted tools are denied, never prompt
+claude_timeout_minutes: 60
+```
+
+Always denied: `git push`, `git reset --hard`, `git clean`, forced git commands. MCP servers are disabled in these sessions.
+A project folder must be trusted by Claude once (run `claude` in it); otherwise the run fails with that instruction.
+Integration tests (real Claude): `DU_E2E_DIR=<trusted dir> go test -tags integration ./executor`.
