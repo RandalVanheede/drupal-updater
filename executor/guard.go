@@ -75,6 +75,13 @@ func Guard(args []string) int {
 			}
 		}
 	}
+	if tool == "ddev" && len(rest) > 0 && (rest[0] == "start" || rest[0] == "restart") {
+		// ddev rewrites its own generated files (providers, host command READMEs) when it is upgraded.
+		// shortcut: content a container writes with the marker during this start is trusted too; rare, pin by ddev version if it matters.
+		if err := trustGenerated(root, runDir); err != nil {
+			fmt.Fprintf(os.Stderr, "drupal-updater guard: %v\n", err)
+		}
+	}
 	if runErr != nil {
 		var exit *exec.ExitError
 		if errors.As(runErr, &exit) {
@@ -317,9 +324,10 @@ func treeSurface(real, projectDir, ref string) (map[string]string, error) {
 	return surface, nil
 }
 
-// checkDdev allows ddev only while the host-executing .ddev files match a trusted state: the one at
-// run start, or a remote-tracking branch as fetched by the run start or by the guard's own fetch/pull.
-// Refs are never read live: code in a container could forge them.
+// checkDdev allows ddev only while every host-executing .ddev file has content that was trusted for
+// that path: in the working tree at run start, or on a remote-tracking branch as fetched at run start
+// or by the guard's own fetch/pull. Per file, so local-only files and pulled upstream updates can mix;
+// deleting a file never adds host code. Refs are never read live: code in a container could forge them.
 func checkDdev(root, runDir string) error {
 	current, err := workingSurface(root)
 	if err != nil {
@@ -329,24 +337,18 @@ func checkDdev(root, runDir string) error {
 	if err != nil {
 		return err
 	}
-	for _, t := range trusted {
-		if maps.Equal(current, t) {
-			return nil
-		}
-	}
-	var changed []string
+	var untrusted []string
 	for f, sum := range current {
-		if trusted[0][f] != sum {
-			changed = append(changed, f)
+		if !slices.ContainsFunc(trusted, func(t map[string]string) bool { return t[f] == sum }) {
+			untrusted = append(untrusted, f)
 		}
 	}
-	for f := range trusted[0] {
-		if _, ok := current[f]; !ok {
-			changed = append(changed, f+" (deleted)")
-		}
+	if len(untrusted) == 0 {
+		return nil
 	}
-	slices.Sort(changed)
-	return fmt.Errorf("ddev: .ddev files that run on the host changed since the run started and match no fetched upstream branch: %s. A human must review them", strings.Join(changed, ", "))
+	slices.Sort(untrusted)
+	return fmt.Errorf("ddev: these .ddev files run on the host and their content matches neither the run start nor any fetched upstream branch: %s. "+
+		"Restore them (git checkout -- <file> for the committed version, or git stash pop if the user's local edits are stashed), then retry", strings.Join(untrusted, ", "))
 }
 
 func readTrusted(runDir string) ([]map[string]string, error) {
@@ -362,6 +364,26 @@ func readTrusted(runDir string) ([]map[string]string, error) {
 		return nil, fmt.Errorf("no trusted .ddev state recorded: %w", err)
 	}
 	return trusted, nil
+}
+
+// trustGenerated adds the current host-executing .ddev files that carry ddev's "#ddev-generated" marker.
+func trustGenerated(root, runDir string) error {
+	trusted, err := readTrusted(runDir)
+	if err != nil {
+		return err
+	}
+	current, err := workingSurface(root)
+	if err != nil {
+		return err
+	}
+	generated := map[string]string{}
+	for f, sum := range current {
+		if data, err := os.ReadFile(filepath.Join(root, f)); err == nil && strings.Contains(string(data), "#ddev-generated") {
+			generated[f] = sum
+		}
+	}
+	data, _ := json.Marshal(append(trusted, generated))
+	return writeReadOnly(filepath.Join(runDir, ddevTrustedFile), data)
 }
 
 // trustRemoteRefs adds the .ddev state of every remote-tracking branch to the trusted list.

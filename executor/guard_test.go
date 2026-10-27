@@ -172,3 +172,47 @@ func TestUpdateGitConfigAcceptsOnlyBranchChanges(t *testing.T) {
 		t.Fatal("snapshot updated despite unexpected change")
 	}
 }
+
+func TestCheckDdevMixesLocalAndUpstreamFiles(t *testing.T) {
+	gitBin, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not installed")
+	}
+	proj, runDir := t.TempDir(), t.TempDir()
+	run := func(args ...string) {
+		cmd := exec.Command(gitBin, append([]string{"-c", "user.email=t@t", "-c", "user.name=t"}, args...)...)
+		cmd.Dir = proj
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	write := func(rel, content string) {
+		os.MkdirAll(filepath.Dir(filepath.Join(proj, rel)), 0o755)
+		os.WriteFile(filepath.Join(proj, rel), []byte(content), 0o644)
+	}
+	write(".ddev/config.yaml", "database: mariadb\n")
+	run("init", "-q")
+	run("add", ".")
+	run("commit", "-qm", "init")
+	run("update-ref", "refs/remotes/origin/master", "HEAD")
+	// run starts with a local edit and a local-only (ignored) config file
+	write(".ddev/config.yaml", "database: mysql\n")
+	write(".ddev/config.local.yaml", "nodejs_version: 24\n")
+	if err := writeGuardState(gitBin, proj, runDir); err != nil {
+		t.Fatal(err)
+	}
+	// stash/pull put the upstream config.yaml back; the local-only file stays
+	write(".ddev/config.yaml", "database: mariadb\n")
+	if err := checkDdev(proj, runDir); err != nil {
+		t.Fatalf("upstream config + local-only file refused: %v", err)
+	}
+	// and the user's own edit coming back (stash pop) is fine too
+	write(".ddev/config.yaml", "database: mysql\n")
+	if err := checkDdev(proj, runDir); err != nil {
+		t.Fatalf("restored local edit refused: %v", err)
+	}
+	write(".ddev/config.local.yaml", "hooks:\n  post-start:\n    - exec-host: touch /tmp/pwned\n")
+	if checkDdev(proj, runDir) == nil {
+		t.Fatal("planted hook in local-only file allowed")
+	}
+}
