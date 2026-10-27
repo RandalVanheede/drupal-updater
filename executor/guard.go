@@ -60,6 +60,11 @@ func Guard(args []string) int {
 		fmt.Fprintf(os.Stderr, "drupal-updater guard: refused: %v\n", err)
 		return 126
 	}
+	starting := tool == "ddev" && len(rest) > 0 && (rest[0] == "start" || rest[0] == "restart")
+	var before map[string]string
+	if starting {
+		before, _ = workingSurface(root)
+	}
 	cmd := exec.Command(real, rest...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	runErr := cmd.Run()
@@ -75,10 +80,10 @@ func Guard(args []string) int {
 			}
 		}
 	}
-	if tool == "ddev" && len(rest) > 0 && (rest[0] == "start" || rest[0] == "restart") {
+	if starting && runErr == nil && before != nil {
 		// ddev rewrites its own generated files (providers, host command READMEs) when it is upgraded.
-		// shortcut: content a container writes with the marker during this start is trusted too; rare, pin by ddev version if it matters.
-		if err := trustGenerated(root, runDir); err != nil {
+		// shortcut: a container process rewriting an existing marked file during this start is trusted too; pin hashes per ddev version if it matters.
+		if err := trustGenerated(root, runDir, before); err != nil {
 			fmt.Fprintf(os.Stderr, "drupal-updater guard: %v\n", err)
 		}
 	}
@@ -366,8 +371,9 @@ func readTrusted(runDir string) ([]map[string]string, error) {
 	return trusted, nil
 }
 
-// trustGenerated adds the current host-executing .ddev files that carry ddev's "#ddev-generated" marker.
-func trustGenerated(root, runDir string) error {
+// trustGenerated adds host-executing .ddev files that ddev rewrote during a start: files that existed
+// before (never new ones), changed, and still carry ddev's "#ddev-generated" marker.
+func trustGenerated(root, runDir string, before map[string]string) error {
 	trusted, err := readTrusted(runDir)
 	if err != nil {
 		return err
@@ -378,6 +384,12 @@ func trustGenerated(root, runDir string) error {
 	}
 	generated := map[string]string{}
 	for f, sum := range current {
+		if old, existed := before[f]; !existed || old == sum {
+			continue
+		}
+		if st, err := os.Lstat(filepath.Join(root, f)); err != nil || !st.Mode().IsRegular() {
+			continue // never a symlink: the marker would come from its target
+		}
 		if data, err := os.ReadFile(filepath.Join(root, f)); err == nil && strings.Contains(string(data), "#ddev-generated") {
 			generated[f] = sum
 		}
