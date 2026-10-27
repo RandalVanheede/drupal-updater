@@ -107,13 +107,21 @@ repo is on the temp branch, and cleans up on failure. Attach with `tmux -L drupa
 mode: claude                    # or "classic" (shell commands + auto-heal in Go)
 claude_model: sonnet            # always passed via --model
 claude_prompt: "..."            # template; default is executor.DefaultClaudePrompt
-                                # placeholders: {{project}} {{path}} {{start_branch}} {{temp_branch}} {{ignored_packages}} {{project_instructions}} {{commands}} {{result_file}}
+                                # placeholders: {{project}} {{path}} {{start_branch}} {{temp_branch}} {{ignored_packages}} {{smoke_paths}} {{project_instructions}} {{commands}} {{result_file}}
 claude_allowed_tools: []        # default: all tools (Read Grep Glob Edit Write Bash WebFetch WebSearch)
 claude_permission_mode: dontAsk # unlisted tools are denied, never prompt
 claude_timeout_minutes: 60
 ```
 
 The default prompt updates core/symfony/twig within their constraints, then fixes every security advisory `composer audit` reports (Drupal core, contrib and other packages) that needs no major upgrade: core may move to a newer minor (10.3 → 10.5) but never a new major, other packages stay on their installed major. Skipped advisories are listed with their reason in the result summary.
+
+Around the update the agent smoke-tests the site: once before updating (baseline) and once after `cex`, with the same checks: Drupal bootstraps, anonymous pages (`/`, `/user/login`, newest node per content type, search, a 404) and admin pages (content, structure, config, node add forms, status report) return 200 without PHP errors, no new Error-level log entries, no pending config. Only checks that passed before and fail after count as regressions; the agent fixes them or rolls back the causing package, and fails the run if one remains. Add project-specific paths per project:
+
+```yaml
+projects:
+  my-site:
+    smoke_paths: [/nl/contact, "admin:/admin/structure/webform"]   # admin: = checked while logged in
+```
 
 The agent works autonomously with every tool. Hard limits, enforced twice (permission deny rules, and read-only `git`/`ddev` shims in `runs/<project>/bin` that run the app's hidden `guard` subcommand, `executor/guard.go`, which also catches aliases, global options and grouped flags):
 - **No commits, merges or pushes**: `git commit/merge/push/cherry-pick/revert/am`, and `git pull` without `--rebase`/`--ff-only`.

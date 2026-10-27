@@ -23,7 +23,7 @@ const (
 )
 
 // DefaultClaudePrompt is used when claude_prompt is not set in the config.
-// Placeholders: {{project}} {{path}} {{start_branch}} {{temp_branch}} {{ignored_packages}}
+// Placeholders: {{project}} {{path}} {{start_branch}} {{temp_branch}} {{ignored_packages}} {{smoke_paths}}
 // {{project_instructions}} {{result_file}} and {{commands}} (the classic command list).
 const DefaultClaudePrompt = `You are updating the Drupal project "{{project}}" located at {{path}} (your working directory). Work fully autonomously: nobody is watching, so never ask questions.
 
@@ -37,13 +37,15 @@ Steps, in order:
 3. Make sure ddev is running: ddev describe, and ddev start if it is not
 4. ddev composer install
 5. ddev drush deploy -y
-6. ddev composer update 'drupal/core-*' 'symfony/*' 'twig/*' --with-all-dependencies
-7. Security updates, see below
-8. ddev drush updb -y
-9. ddev drush cex -y
-10. ddev stop
+6. Smoke tests, baseline (see below): the site as it is before any update
+7. ddev composer update 'drupal/core-*' 'symfony/*' 'twig/*' --with-all-dependencies
+8. Security updates, see below
+9. ddev drush updb -y
+10. ddev drush cex -y
+11. Smoke tests again, after the update, and compare with the baseline (see below)
+12. ddev stop
 
-Security updates (step 7). Goal: fix every security advisory that can be fixed without a major upgrade.
+Security updates (step 8). Goal: fix every security advisory that can be fixed without a major upgrade.
 - Find advisories with ddev composer audit --format=json (it covers drupal/* and all other Composer packages). Cross-check Drupal ones with ddev drush pm:security if that command exists.
 - "Major" is the first version number as Composer sees it. Drupal contrib "8.x-1.5" is 1.5.0 to Composer, so 8.x-1.x and 1.x are the same major; 1.x to 2.x is a major upgrade.
 - Drupal core first, because contrib fixes may need a newer core minor: move drupal/core and its companions (drupal/core-recommended, drupal/core-composer-scaffold, drupal/core-project-message, and drupal/core-dev if required) together to the lowest fixed release within the installed major. A minor bump (e.g. 10.3 to 10.5) is fine; a new major (10 to 11) never.
@@ -51,6 +53,16 @@ Security updates (step 7). Goal: fix every security advisory that can be fixed w
 - Skip an advisory, and keep going with the rest, when the fix needs: a new major of the package, a new major of Drupal core (directly or through its dependencies), a newer PHP than the project runs, or an update of a package listed below as not to be updated. Never use --ignore-platform-reqs. Never move core to a new major.
 - If one package's fix conflicts, revert just that change (git checkout -- composer.json composer.lock, then redo the others) rather than giving up on all of them.
 - Finish with ddev composer audit again and compare: every advisory left must be one you deliberately skipped.
+
+Smoke tests (steps 6 and 11). Run the same checks both times and keep the baseline results. Get the site URL from ddev describe; for admin pages log in with ddev drush uli and follow that link with curl, keeping the session in a cookie jar.
+- ddev drush status bootstraps Drupal; ddev drush cr succeeds.
+- Anonymous, each must return 200 without PHP errors, exceptions or "The website encountered an unexpected error" in the HTML: /, /user/login, the newest published node of each content type, /search if the search module is enabled. A made-up path must return 404, not 500.
+- As admin, each must return 200 without errors: /admin/content, /admin/structure, /admin/config, /node/add/<type> for each content type, and /admin/reports/status without Error-level requirements.
+- No new Error-level log entries since the baseline (ddev drush ws --severity=Error).
+- After step 10: ddev drush cst shows nothing pending.
+- Extra paths for this project (prefix admin: means check while logged in): {{smoke_paths}}
+A regression is a check that passed at the baseline and fails after the update. A check that already failed at the baseline is pre-existing: report it, don't try to fix it.
+For each regression: find the cause (page output, logs) and fix it when the update caused it (cache, config import, update hook, patch, constraint). If you can't, roll back only the package that causes it, as with a skipped security fix, and run the checks again. If a regression remains, finish with status failed and name the broken check.
 
 Packages that must NOT be updated: {{ignored_packages}}
 {{project_instructions}}
@@ -70,7 +82,7 @@ Rules (enforced; refused commands explain what to do instead):
 - Keep the changes to what the update needs; local environment fixes (.ddev, database) are fine.
 
 Finish by writing the file {{result_file}} containing JSON only:
-{"status": "success" | "failed", "summary": "<what was updated (core version change, each security update with old -> new version), each skipped advisory with its reason; or what failed and why>"}
+{"status": "success" | "failed", "summary": "<what was updated (core version change, each security update with old -> new version), each skipped advisory with its reason, smoke tests: checks run, regressions fixed, packages rolled back, pre-existing failures; or what failed and why>"}
 On success you must be on branch {{temp_branch}} when you write it. On failure, first return to the start branch (stash a dirty tree if needed) and delete {{temp_branch}}, then write the file.`
 
 // The agent works autonomously with every tool; the hard limits live in claudeDenied and in the
@@ -265,15 +277,18 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 		numbered[i] = fmt.Sprintf("%d. %s", i+1, c)
 	}
 	proj := claudeCfg.projects[name]
-	ignored := "none"
+	ignored, smoke := "none", "none"
 	if len(proj.IgnoredPackages) > 0 {
 		ignored = strings.Join(proj.IgnoredPackages, ", ")
+	}
+	if len(proj.SmokePaths) > 0 {
+		smoke = strings.Join(proj.SmokePaths, ", ")
 	}
 	if proj.ClaudeInstructions != "" {
 		proj.ClaudeInstructions = "\nExtra instructions for this project:\n" + proj.ClaudeInstructions + "\n"
 	}
 	prompt := strings.NewReplacer(
-		"{{ignored_packages}}", ignored, "{{project_instructions}}", proj.ClaudeInstructions,
+		"{{ignored_packages}}", ignored, "{{smoke_paths}}", smoke, "{{project_instructions}}", proj.ClaudeInstructions,
 		"{{project}}", name, "{{path}}", path, "{{start_branch}}", startBranch,
 		"{{temp_branch}}", tempBranch, "{{commands}}", strings.Join(numbered, "\n"), "{{result_file}}", resultFile,
 	).Replace(claudeCfg.prompt)
