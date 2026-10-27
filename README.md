@@ -107,7 +107,7 @@ mode: claude                    # or "classic" (shell commands + auto-heal in Go
 claude_model: sonnet            # always passed via --model
 claude_prompt: "..."            # template; default is executor.DefaultClaudePrompt
                                 # placeholders: {{project}} {{path}} {{start_branch}} {{temp_branch}} {{commands}} {{result_file}}
-claude_allowed_tools: []        # default: Read Grep Glob Edit Write, Bash(git|ddev|composer|drush|sleep *)
+claude_allowed_tools: []        # default: Read Grep Glob Edit Write, Bash(git|ddev|sleep *)
 claude_permission_mode: dontAsk # unlisted tools are denied, never prompt
 claude_timeout_minutes: 60
 ```
