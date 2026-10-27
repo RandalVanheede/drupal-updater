@@ -1,24 +1,31 @@
-# Drupal Updater TUI — Implementation Plan
+# Drupal Updater
 
-A Terminal User Interface (TUI) application designed to manage and batch-update local Drupal projects. Built in **Go** with the [Bubbletea](https://github.com/charmbracelet/bubbletea) framework.
-
-## Architecture
+Batch-updates local Drupal projects. Two frontends share one Go engine: a terminal UI ([Bubbletea](https://github.com/charmbracelet/bubbletea)) and a desktop app ([Wails](https://wails.io) + Svelte). Runs on macOS and Linu## Architecture
 
 ```
 drupal-updater/
-├── main.go                 # Entrypoint: loads config, discovers projects, starts TUI
-├── config/
-│   └── config.go           # YAML config loading & per-project defaults
-├── discovery/
-│   └── discovery.go        # Auto-detects Drupal/DDEV projects in base folder
-├── executor/
-│   └── executor.go         # Runs shell commands per project in goroutines
-├── ui/
-│   └── ui.go               # Bubbletea TUI (list, input, running views)
-├── go.mod
-├── go.sum
-└── IMPLEMENTATION_PLAN.md  # This file
+├── main.go          # TUI entrypoint (`--config` opens the config editor, `api` is a hidden JSON CLI)
+├── api/             # JSON/stdin/stdout commands used by the desktop app
+├── config/          # YAML config loading & per-project defaults
+├── discovery/       # Auto-detects Drupal/DDEV projects in base folder
+├── executor/        # Runs updates per project (classic shell mode or Claude in tmux)
+├── logging/         # File logger
+├── ui/              # Bubbletea TUI (list, input, running views, config editor)
+├── desktop/         # Wails desktop app (Go bindings in main.go, Svelte frontend)
+└── scripts/         # build-dmg.sh (macOS), build-linux.sh, bundle-tmux.sh
 ```
+
+## Building
+
+| Target | Command | Output |
+|--------|---------|--------|
+| TUI (any OS) | `go build -o drupal-updater .` | `./drupal-updater` |
+| macOS desktop | `scripts/build-dmg.sh` | `desktop/build/bin/Drupal-Updater.dmg` (tmux bundled; the `.app` is not kept, so Spotlight only finds the installed one) |
+| Linux desktop | `scripts/build-linux.sh` (on Linux; needs `libgtk-3-dev` + `libwebkit2gtk-4.1-dev` or `-4.0-dev`) | `desktop/build/bin/drupal-updater-linux-<arch>.tar.gz`, unpack and run `install.sh` |
+
+Wails can't cross-compile between operating systems, so build the Linux desktop app on Linux (or in Docker). On Linux, tmux and claude must be installed on the system.
+
+``
 
 ## Configuration
 

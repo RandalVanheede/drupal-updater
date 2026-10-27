@@ -22,7 +22,7 @@ type Config struct {
 	ClaudeModel           string                   `yaml:"claude_model,omitempty" json:"ClaudeModel"`   // default sonnet
 	ClaudePrompt          string                   `yaml:"claude_prompt,omitempty" json:"ClaudePrompt"` // default: executor.DefaultClaudePrompt
 	ClaudeAllowedTools    []string                 `yaml:"claude_allowed_tools,omitempty" json:"ClaudeAllowedTools"`
-	ClaudePermissionMode  string                   `yaml:"claude_permission_mode,omitempty" json:"ClaudePermissionMode"`   // default acceptEdits
+	ClaudePermissionMode  string                   `yaml:"claude_permission_mode,omitempty" json:"ClaudePermissionMode"`   // default dontAsk
 	ClaudeTimeoutMinutes  int                      `yaml:"claude_timeout_minutes,omitempty" json:"ClaudeTimeoutMinutes"`   // default 60
 	MaxAttempts           int                      `yaml:"max_attempts,omitempty" json:"MaxAttempts"`                      // per command, default 3
 	CommandTimeoutMinutes int                      `yaml:"command_timeout_minutes,omitempty" json:"CommandTimeoutMinutes"` // default 30
