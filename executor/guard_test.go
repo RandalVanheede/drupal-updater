@@ -13,7 +13,7 @@ func TestCheckGitArgs(t *testing.T) {
 	}
 	refused := [][]string{
 		{"commit", "-m", "x"}, {"push"}, {"merge", "x"}, {"cherry-pick", "abc"}, {"-C", "/tmp", "push"},
-		{"-c", "user.name=x", "commit"}, {"-c", "alias.x=push", "x"}, {"ci"}, {"sh"}, {"pull"}, {"pull", "origin", "main"},
+		{"-c", "user.name=x", "commit"}, {"-c", "alias.x=push", "x"}, {"--config-env=alias.x=E", "x"}, {"--config-env", "Alias.x=E", "x"}, {"-c", "include.path=/tmp/c", "x"}, {"ci"}, {"sh"}, {"pull"}, {"pull", "origin", "main"},
 		{"pull", "--rebase=false"}, {"reset", "--hard"}, {"clean", "-fd"}, {"stash", "drop"}, {"stash", "clear"},
 	}
 	for _, a := range allowed {

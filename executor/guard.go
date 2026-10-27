@@ -62,11 +62,14 @@ var gitGlobalWithValue = []string{"-C", "-c", "--git-dir", "--work-tree", "--nam
 func checkGitArgs(args []string, alias func(string) string) error {
 	i := 0
 	for i < len(args) && strings.HasPrefix(args[i], "-") { // skip global options to find the subcommand
-		if args[i] == "-c" && i+1 < len(args) && strings.HasPrefix(args[i+1], "alias.") {
-			return errors.New("git: defining aliases with -c is not allowed")
-		}
-		if slices.Contains(gitGlobalWithValue, args[i]) {
+		opt, val, inline := strings.Cut(args[i], "=")
+		if !inline && slices.Contains(gitGlobalWithValue, opt) && i+1 < len(args) {
 			i++
+			val = args[i]
+		}
+		// an alias or include defined here would hide the real subcommand from this check
+		if (opt == "-c" || opt == "--config-env") && (strings.HasPrefix(strings.ToLower(val), "alias.") || strings.HasPrefix(strings.ToLower(val), "include")) {
+			return errors.New("git: defining aliases or includes on the command line is not allowed")
 		}
 		i++
 	}
