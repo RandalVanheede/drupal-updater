@@ -294,7 +294,7 @@ func (cm *configModel) updateProjectEdit(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cm.fieldCursor--
 			}
 		case "down", "j":
-			if cm.fieldCursor < 3 {
+			if cm.fieldCursor < 4 {
 				cm.fieldCursor++
 			}
 		case "enter":
@@ -320,6 +320,12 @@ func (cm *configModel) updateProjectEdit(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cm.usingTA = false
 				cm.state = ConfigProjectEditField
 			case 3:
+				cm.input.SetValue(strings.Join(pc.SmokePaths, ", "))
+				cm.editingField = "smoke_paths"
+				cm.input.CursorEnd()
+				cm.usingTA = false
+				cm.state = ConfigProjectEditField
+			case 4:
 				cm.ta.SetValue(strings.Join(pc.Commands, "\n"))
 				cm.ta.Focus()
 				cm.usingTA = true
@@ -329,6 +335,17 @@ func (cm *configModel) updateProjectEdit(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return cm, nil
+}
+
+// splitList turns "a, b,,c" into [a b c]; nil when empty.
+func splitList(val string) []string {
+	var out []string
+	for _, p := range strings.Split(val, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func (cm *configModel) saveProjectField() {
@@ -355,18 +372,9 @@ func (cm *configModel) saveProjectField() {
 	case "git_new_branch_pattern":
 		pc.GitNewBranchPattern = val
 	case "ignored_packages":
-		if val == "" {
-			pc.IgnoredPackages = nil
-		} else {
-			parts := strings.Split(val, ",")
-			pc.IgnoredPackages = nil
-			for _, p := range parts {
-				p = strings.TrimSpace(p)
-				if p != "" {
-					pc.IgnoredPackages = append(pc.IgnoredPackages, p)
-				}
-			}
-		}
+		pc.IgnoredPackages = splitList(val)
+	case "smoke_paths":
+		pc.SmokePaths = splitList(val)
 	case "commands":
 		if val == "" {
 			pc.Commands = nil

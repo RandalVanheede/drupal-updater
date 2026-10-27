@@ -148,6 +148,7 @@
         GitStartBranch: 'master',
         GitNewBranchPattern: 'hotfix/*',
         IgnoredPackages: [],
+        SmokePaths: [],
         Commands: config.DefaultCommands && config.DefaultCommands.length > 0
           ? [...config.DefaultCommands]
           : [
@@ -331,7 +332,7 @@
       </div>
       <div class="config-group" style="margin-top: 12px;">
         <label style="flex: 1;">
-          Prompt — placeholders: {'{{project}} {{path}} {{start_branch}} {{temp_branch}} {{ignored_packages}} {{project_instructions}} {{result_file}}'}
+          Prompt — placeholders: {'{{project}} {{path}} {{start_branch}} {{temp_branch}} {{ignored_packages}} {{smoke_paths}} {{project_instructions}} {{result_file}}'}
           <textarea autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" rows="16" bind:value={config.ClaudePrompt}></textarea>
         </label>
         <button class="btn-sm" onclick={() => config.ClaudePrompt = claudeDefaults.prompt}>Reset prompt to default</button>
@@ -365,6 +366,11 @@
                   Ignored packages (comma-separated)
                   <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" value={config.Projects[name].IgnoredPackages?.join(', ') || ''}
                     onchange={(e) => config.Projects[name].IgnoredPackages = e.target.value.split(',').map(s => s.trim()).filter(Boolean)} />
+                </label>
+                <label>
+                  Extra smoke-test paths (comma-separated; prefix admin: for logged-in)
+                  <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" value={config.Projects[name].SmokePaths?.join(', ') || ''}
+                    onchange={(e) => config.Projects[name].SmokePaths = e.target.value.split(',').map(s => s.trim()).filter(Boolean)} />
                 </label>
                 {#if config.Mode === 'classic'}
                 <label>

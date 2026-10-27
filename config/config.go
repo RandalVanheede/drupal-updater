@@ -11,6 +11,7 @@ type ProjectConfig struct {
 	GitStartBranch      string   `yaml:"git_start_branch" json:"GitStartBranch"`
 	GitNewBranchPattern string   `yaml:"git_new_branch_pattern" json:"GitNewBranchPattern"`
 	IgnoredPackages     []string `yaml:"ignored_packages" json:"IgnoredPackages"`
+	SmokePaths          []string `yaml:"smoke_paths,omitempty" json:"SmokePaths"`                 // extra paths the agent checks before/after updating; "admin:" prefix = logged in
 	Commands            []string `yaml:"commands" json:"Commands"`                                // classic mode only
 	ClaudeInstructions  string   `yaml:"claude_instructions,omitempty" json:"ClaudeInstructions"` // extra per-project prompt text, claude mode
 }
