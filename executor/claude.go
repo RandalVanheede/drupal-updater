@@ -61,8 +61,9 @@ Finish by writing the file {{result_file}} containing JSON only:
 {"status": "success" | "failed", "summary": "<one or two sentences: what was updated, or what failed and why>"}
 On success you must be on branch {{temp_branch}} when you write it. On failure, first return to the start branch (stash a dirty tree if needed) and delete {{temp_branch}}, then write the file.`
 
+// Edit/Write are added per run, scoped to the project and the result folder: a bare "Edit"/"Write" allows writes anywhere (~/.zprofile, ~/.claude).
 var defaultClaudeAllowed = []string{
-	"Read", "Grep", "Glob", "Edit", "Write",
+	"Read", "Grep", "Glob",
 	"Bash(git *)", "Bash(ddev *)", "Bash(sleep *)", // composer/drush only via ddev: host-side runs project scripts on the host
 }
 
@@ -81,6 +82,9 @@ var claudeDenied = []string{
 	"Bash(git bisect*)", "Bash(git difftool*)", "Bash(git mergetool*)", "Bash(git * --exec*)", "Bash(git * -x*)", "Bash(git * --upload-pack*)",
 	"Bash(git grep*)", "Bash(git * grep*)", "Bash(git * -O*)", "Bash(git * --open-files-in-pager*)", // grep -O runs a pager program
 	"Bash(git --config-env*)", "Bash(git * --config-env*)", "Bash(git -C*)", "Bash(git --exec-path*)", "Bash(git --git-dir*)", "Bash(git --work-tree*)",
+	"Bash(git * --exec-path*)", "Bash(git * --git-dir*)", "Bash(git * --work-tree*)", "Bash(git * -C *)",
+	"Bash(git --bare*)", "Bash(git * --bare*)", "Bash(git apply*)", "Bash(git am*)", // can write files outside Edit rules (.ddev/)
+	"Bash(ddev add-on*)", "Bash(ddev get*)", "Bash(ddev dotenv*)", // install/modify .ddev, incl. host commands
 	"Edit(.ddev/**)", // host commands (.ddev/commands/host) and exec-host hooks would run on the host via "ddev *"
 	"Bash(ddev composer exec*)", "Bash(ddev composer run*)", "Bash(ddev mysql*)", "Bash(ddev launch*)",
 	"Edit(.git/**)", // Edit rules cover Write too
@@ -290,7 +294,10 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 	if r, err := filepath.EvalSymlinks(path); err == nil {
 		root = r
 	}
-	allowed := append(append([]string(nil), claudeCfg.allowed...), "Bash("+importDB+" *)")
+	allowed := append(append([]string(nil), claudeCfg.allowed...), "Bash("+importDB+" *)", "Edit(/"+root+"/**)", "Edit(/"+outDir+"/**)")
+	if root != path {
+		allowed = append(allowed, "Edit(/"+path+"/**)")
+	}
 	denied := append([]string(nil), claudeDenied...)
 	for _, f := range []string{"run.sh", "import-db.sh", "settings.json", "prompt.md"} {
 		denied = append(denied, "Edit(/"+filepath.Join(runDir, f)+")") // "//" = absolute path; Edit rules cover Write too
