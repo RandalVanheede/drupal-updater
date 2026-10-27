@@ -99,7 +99,7 @@ Each match becomes a selectable project in the TUI.
 ## Claude mode (default)
 
 Each project's update runs in a detached tmux session (`du-<project>`) with `claude --model sonnet`.
-The app only starts the session, waits for `~/.config/drupal-updater/runs/<project>/result.json`, verifies the
+The app only starts the session, waits for `~/.config/drupal-updater/runs/<project>/out/result.json` (the only run folder Claude may write to), verifies the
 repo is on the temp branch, and cleans up on failure. Attach with `tmux -L drupal-updater attach -t du-<project>` (private tmux socket; tmux is bundled in the .app by `scripts/bundle-tmux.sh`).
 
 ```yaml
@@ -112,6 +112,6 @@ claude_permission_mode: dontAsk # unlisted tools are denied, never prompt
 claude_timeout_minutes: 60
 ```
 
-Always denied: `git push`, `git reset --hard`, `git clean`, forced git commands. MCP servers are disabled in these sessions.
+Always denied: `git push`, `git reset --hard`, `git clean`, forced git commands. MCP servers and the repo's own `.claude/` settings (hooks, permissions) are disabled in these sessions.
 A project folder must be trusted by Claude once (run `claude` in it); otherwise the run fails with that instruction.
 Integration tests (real Claude): `DU_E2E_DIR=<trusted dir> go test -tags integration ./executor`.

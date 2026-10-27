@@ -80,7 +80,7 @@ var claudeDenied = []string{
 	"Bash(ddev exec*)", "Bash(ddev ssh*)", "Bash(ddev import-db*)", "Bash(ddev config*)",
 	"Bash(git bisect*)", "Bash(git difftool*)", "Bash(git mergetool*)", "Bash(git * --exec*)", "Bash(git * -x*)", "Bash(git * --upload-pack*)",
 	"Bash(ddev composer exec*)", "Bash(ddev composer run*)", "Bash(ddev mysql*)", "Bash(ddev launch*)",
-	"Edit(.git/**)", "Write(.git/**)",
+	"Edit(.git/**)", // Edit rules cover Write too
 	"Bash(drush php*)", "Bash(drush ev*)", "Bash(drush sql*)", "Bash(ddev drush php*)", "Bash(ddev drush ev*)", "Bash(ddev drush sql*)",
 }
 
@@ -243,11 +243,12 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 	}
 	cfgDir := filepath.Join(home, ".config") // same place as config.yaml and updater.log
 	runDir := filepath.Join(cfgDir, "drupal-updater", "runs", safeName(name))
-	resultFile := filepath.Join(runDir, "result.json")
+	outDir := filepath.Join(runDir, "out") // the only run folder Claude may write to; run.sh/import-db.sh stay out of reach
+	resultFile := filepath.Join(outDir, "result.json")
 	turnFile := filepath.Join(runDir, "turn-done")
 	exitFile := filepath.Join(runDir, "exit")
 
-	if err := os.MkdirAll(runDir, 0o755); err != nil {
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		fail(err.Error())
 		return
 	}
@@ -287,16 +288,22 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 		root = r
 	}
 	allowed := append(append([]string(nil), claudeCfg.allowed...), "Bash("+importDB+" *)")
-	script := fmt.Sprintf("#!/bin/sh\ncd %s || exit 1\nclaude --model %s --strict-mcp-config --permission-mode %s --settings %s --add-dir %s --allowedTools=%s --disallowedTools=%s \"$(cat %s)\"\necho $? > %s\n",
-		sq(path), sq(claudeCfg.model), sq(claudeCfg.permission), sq(filepath.Join(runDir, "settings.json")), sq(runDir),
-		sq(strings.Join(allowed, ",")), sq(strings.Join(claudeDenied, ",")), sq(filepath.Join(runDir, "prompt.md")), sq(exitFile))
+	denied := append([]string(nil), claudeDenied...)
+	for _, f := range []string{"run.sh", "import-db.sh", "settings.json", "prompt.md"} {
+		denied = append(denied, "Edit(/"+filepath.Join(runDir, f)+")") // "//" = absolute path; Edit rules cover Write too
+	}
+	// --setting-sources user: the repo is auto-trusted, so never load hooks/permissions from its .claude/ settings.
+	script := fmt.Sprintf("#!/bin/sh\ncd %s || exit 1\nclaude --model %s --strict-mcp-config --setting-sources user --permission-mode %s --settings %s --add-dir %s --allowedTools=%s --disallowedTools=%s \"$(cat %s)\"\necho $? > %s\n",
+		sq(path), sq(claudeCfg.model), sq(claudeCfg.permission), sq(filepath.Join(runDir, "settings.json")), sq(outDir),
+		sq(strings.Join(allowed, ",")), sq(strings.Join(denied, ",")), sq(filepath.Join(runDir, "prompt.md")), sq(exitFile))
 	files := map[string]string{"prompt.md": prompt, "settings.json": string(settingsJSON), "run.sh": script,
 		"import-db.sh": fmt.Sprintf(importDBScript, sq(root), dumpMaxAgeDays)}
 	for f, content := range files {
-		perm := os.FileMode(0o644)
+		perm := os.FileMode(0o444) // read-only, so a shell redirect can't rewrite them either
 		if f == "import-db.sh" {
-			perm = 0o755
+			perm = 0o555
 		}
+		os.Remove(filepath.Join(runDir, f)) // earlier run's copy is read-only
 		if err := os.WriteFile(filepath.Join(runDir, f), []byte(content), perm); err != nil {
 			fail(err.Error())
 			return
