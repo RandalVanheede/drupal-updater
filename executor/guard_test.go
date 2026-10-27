@@ -244,3 +244,26 @@ func checkDdevErr(root, runDir string) error {
 	_, err := checkDdev(root, runDir)
 	return err
 }
+
+func TestCheckDdevArgs(t *testing.T) {
+	allowed := [][]string{
+		{"start"}, {"stop"}, {"stop", "--unlist", "old-name"}, {"snapshot", "--name", "pre-update"},
+		{"snapshot", "restore", "--latest"}, {"composer", "update", "drupal/core-*", "-W"}, {"drush", "updb", "-y"},
+		{"utility", "migrate-database", "mariadb:10.11"}, {"composer", "show", "--all"},
+	}
+	refused := [][]string{
+		{"delete", "-Oy"}, {"stop", "-R"}, {"stop", "--unlist", "x", "-aR"}, {"stop", "--remove-data"}, {"stop", "-O"},
+		{"start", "--reset-database"}, {"restart", "-yO", "--reset-database"}, {"snapshot", "-C", "-y"},
+		{"snapshot", "--name", "x", "-yC"}, {"snapshot", "--cleanup=true"}, {"start", "--all"},
+	}
+	for _, a := range allowed {
+		if err := checkDdevArgs(a); err != nil {
+			t.Errorf("refused %v: %v", a, err)
+		}
+	}
+	for _, a := range refused {
+		if checkDdevArgs(a) == nil {
+			t.Errorf("allowed %v", a)
+		}
+	}
+}

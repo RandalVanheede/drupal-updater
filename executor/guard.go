@@ -52,7 +52,9 @@ func Guard(args []string) int {
 			sub = rest[0] // checked non-empty above
 			rest = append([]string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"}, rest...)
 		case "ddev":
-			verified, err = checkDdev(root, runDir)
+			if err = checkDdevArgs(rest); err == nil {
+				verified, err = checkDdev(root, runDir)
+			}
 		default:
 			err = fmt.Errorf("unknown tool %q", tool)
 		}
@@ -236,6 +238,38 @@ func gitRemotes(git, root string) []string {
 	cmd.Dir = root
 	out, _ := cmd.Output()
 	return strings.Fields(string(out))
+}
+
+// ddev flags that destroy the local database or snapshots, or act on other projects (--all).
+// pflag has no abbreviations, but short flags can be grouped (-aR), so groups are checked per letter.
+var ddevDangerousLong = []string{"reset-database", "remove-data", "omit-snapshot", "cleanup", "all"}
+var ddevDangerousShort = map[string]string{"stop": "aRO", "start": "aO", "restart": "aO", "snapshot": "aC"}
+
+func checkDdevArgs(args []string) error {
+	if len(args) > 0 && args[0] == "delete" {
+		return errors.New("ddev delete is not allowed: it removes the project's database")
+	}
+	sub := ""
+	if len(args) > 0 {
+		sub = args[0]
+	}
+	if _, ok := ddevDangerousShort[sub]; !ok {
+		return nil // e.g. composer/drush: their flags go to the tool in the container, not to ddev
+	}
+	for _, a := range args {
+		if a == "--" {
+			break
+		}
+		if name, ok := strings.CutPrefix(a, "--"); ok {
+			name, _, _ = strings.Cut(name, "=")
+			if slices.Contains(ddevDangerousLong, name) {
+				return fmt.Errorf("ddev %s: --%s is not allowed (destroys data or touches other projects)", sub, name)
+			}
+		} else if strings.HasPrefix(a, "-") && strings.ContainsAny(a[1:], ddevDangerousShort[sub]) {
+			return fmt.Errorf("ddev %s: options -%s are not allowed (found in %s)", sub, ddevDangerousShort[sub], a)
+		}
+	}
+	return nil
 }
 
 // ddevSurface reports whether a project-relative path lets ddev run code on the host
