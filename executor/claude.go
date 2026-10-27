@@ -79,7 +79,9 @@ var claudeDenied = []string{
 	"Bash(composer exec*)", "Bash(composer run*)", "Bash(composer global*)", "Bash(composer config*)",
 	"Bash(ddev exec*)", "Bash(ddev ssh*)", "Bash(ddev import-db*)", "Bash(ddev config*)",
 	"Bash(git bisect*)", "Bash(git difftool*)", "Bash(git mergetool*)", "Bash(git * --exec*)", "Bash(git * -x*)", "Bash(git * --upload-pack*)",
-	"Bash(git grep*)", "Bash(git --config-env*)", "Bash(git * --config-env*)", // grep -O runs a pager program
+	"Bash(git grep*)", "Bash(git * grep*)", "Bash(git * -O*)", "Bash(git * --open-files-in-pager*)", // grep -O runs a pager program
+	"Bash(git --config-env*)", "Bash(git * --config-env*)", "Bash(git -C*)", "Bash(git --exec-path*)", "Bash(git --git-dir*)", "Bash(git --work-tree*)",
+	"Edit(.ddev/**)", // host commands (.ddev/commands/host) and exec-host hooks would run on the host via "ddev *"
 	"Bash(ddev composer exec*)", "Bash(ddev composer run*)", "Bash(ddev mysql*)", "Bash(ddev launch*)",
 	"Edit(.git/**)", // Edit rules cover Write too
 	"Bash(drush php*)", "Bash(drush ev*)", "Bash(drush sql*)", "Bash(ddev drush php*)", "Bash(ddev drush ev*)", "Bash(ddev drush sql*)",
