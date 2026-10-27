@@ -50,7 +50,7 @@ Solve simple problems yourself and retry, for example:
 - temp branch already exists, wrong default branch name, ddev router/network race, transient network errors: retry (up to 3 times)
 - autostash pop conflict on a local-only config file (e.g. .ddev/*): keep the upstream version (git checkout -- <file>) and continue, but never drop that stash: it holds the user's own local edits (the app prunes old drupal-updater stashes itself). Mention the stash in the summary.
 - ddev refuses to start because the existing database type/version differs from .ddev/config.yaml (e.g. the volume holds mysql:8.0, config says mariadb:10.11): convert it to the configured one with ddev utility migrate-database <type>:<version from config.yaml>; it keeps the data. Never reset or delete the database.
-- ddev refuses to start because upstream renamed the project (name in .ddev/config.yaml differs from the one registered for this directory): ddev stop --unlist <old-name>, then ddev start. Then check the site boots (ddev drush status). If the database is missing or empty afterwards, try to restore one yourself: ddev snapshot restore, ddev pull if configured, or a recent dump in the project root or ./db via {{import_db}} <file> (the only permitted way to import; it rejects other locations and dumps older than 30 days). Report failure only if none works.
+- ddev refuses to start because upstream renamed the project (name in .ddev/config.yaml differs from the one registered for this directory): ddev stop --unlist <old-name>, then ddev start. Then check the site boots (ddev drush status). If the database is missing or empty afterwards, try to restore one yourself: ddev snapshot restore --latest, ddev pull if configured, or a recent dump in the project root or ./db via {{import_db}} <file> (the only permitted way to import; it rejects other locations and dumps older than 30 days). Report failure only if none works.
 Be persistent. Diagnose every problem (read the error, inspect state, check logs) and fix it yourself, including composer conflicts, merge/stash conflicts, ddev/docker issues, config import errors and failing update hooks. Try several different approaches before giving up. Only report failure when the problem truly needs a human: missing credentials or access, a decision only the owner can make, or an action you are not permitted to take (see Rules). When you do fail, say exactly what you tried and what is needed.
 
 Rules:
@@ -74,8 +74,8 @@ var defaultClaudeAllowed = []string{
 	"Bash(git remote)", "Bash(git remote -v)", "Bash(git remote show origin)", "Bash(git remote get-url origin)",
 	"Bash(git merge --abort)", "Bash(git merge --continue)", "Bash(git rebase --abort)", "Bash(git rebase --continue)", "Bash(git rebase --skip)",
 	"Bash(git add*)", "Bash(git commit*)", "Bash(git restore*)",
-	"Bash(ddev describe*)", "Bash(ddev start*)", "Bash(ddev stop*)", "Bash(ddev restart*)", "Bash(ddev list*)", "Bash(ddev logs*)",
-	"Bash(ddev poweroff*)", "Bash(ddev snapshot*)", "Bash(ddev pull*)", "Bash(ddev utility migrate-database *)",
+	"Bash(ddev describe*)", "Bash(ddev start*)", "Bash(ddev stop)", "Bash(ddev stop --unlist *)", "Bash(ddev restart*)", "Bash(ddev list*)", "Bash(ddev logs*)",
+	"Bash(ddev poweroff*)", "Bash(ddev snapshot)", "Bash(ddev snapshot --name *)", "Bash(ddev snapshot --list)", "Bash(ddev snapshot restore *)", "Bash(ddev pull*)", "Bash(ddev utility migrate-database *)",
 	"Bash(ddev composer install*)", "Bash(ddev composer update*)", "Bash(ddev composer require*)", "Bash(ddev composer remove*)",
 	"Bash(ddev composer show*)", "Bash(ddev composer why*)", "Bash(ddev composer depends*)", "Bash(ddev composer prohibits*)",
 	"Bash(ddev composer outdated*)", "Bash(ddev composer validate*)", "Bash(ddev composer diagnose*)", "Bash(ddev composer audit*)",
@@ -105,7 +105,8 @@ var claudeDenied = []string{
 	"Bash(git * --exec-path*)", "Bash(git * --git-dir*)", "Bash(git * --work-tree*)", "Bash(git * -C *)",
 	"Bash(git --bare*)", "Bash(git * --bare*)", "Bash(git apply*)", "Bash(git am*)", // can write files outside Edit rules (.ddev/)
 	"Bash(ddev add-on*)", "Bash(ddev get*)", "Bash(ddev dotenv*)", // install/modify .ddev, incl. host commands
-	"Bash(ddev * --reset-database*)", "Bash(ddev snapshot --cleanup*)", "Bash(ddev delete*)", // destroy the local database or its snapshots
+	"Bash(ddev * --reset-database*)", "Bash(ddev * --remove-data*)", "Bash(ddev * --omit-snapshot*)", "Bash(ddev * -R*)",
+	"Bash(ddev snapshot -C*)", "Bash(ddev snapshot * -C*)", "Bash(ddev snapshot --cleanup*)", "Bash(ddev snapshot * --cleanup*)", "Bash(ddev delete*)", // destroy the local database or its snapshots
 	"Edit(.ddev/**)", "Edit(**/.ddev/**)", // host commands (.ddev/commands/host) and exec-host hooks would run on the host via "ddev *"
 	"Bash(ddev composer exec*)", "Bash(ddev composer run*)", "Bash(ddev mysql*)", "Bash(ddev launch*)",
 	"Edit(.git/**)", "Edit(**/.git/**)", // Edit rules cover Write too; ** form also matches via a symlinked path
