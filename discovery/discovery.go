@@ -70,3 +70,13 @@ func DiscoverProjects(baseFolder string, excludedProjects []string) ([]Project, 
 
 	return projects, nil
 }
+
+// Find returns the project with the given name.
+func Find(projects []Project, name string) (Project, bool) {
+	for _, p := range projects {
+		if p.Name == name {
+			return p, true
+		}
+	}
+	return Project{}, false
+}

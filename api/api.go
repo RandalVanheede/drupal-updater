@@ -60,16 +60,6 @@ func discoverOrFatal(cfg *config.Config) []discovery.Project {
 	return projects
 }
 
-// findProject looks up a project by name.
-func findProject(projects []discovery.Project, name string) (discovery.Project, bool) {
-	for _, p := range projects {
-		if p.Name == name {
-			return p, true
-		}
-	}
-	return discovery.Project{}, false
-}
-
 // flagValue parses --flag=value or --flag value from args.
 func flagValue(args []string, flag string) string {
 	prefix := "--" + flag + "="
@@ -206,7 +196,7 @@ func cmdStartUpdate(args []string) {
 			if name == "" {
 				continue
 			}
-			p, ok := findProject(allProjects, name)
+			p, ok := discovery.Find(allProjects, name)
 			if !ok {
 				fatal(fmt.Sprintf("project not found: %s", name))
 			}
@@ -311,7 +301,7 @@ func cmdRenameBranch(args []string) {
 	cfg := loadConfigOrFatal()
 	projects := discoverOrFatal(cfg)
 
-	p, ok := findProject(projects, projectName)
+	p, ok := discovery.Find(projects, projectName)
 	if !ok {
 		fatal(fmt.Sprintf("project not found: %s", projectName))
 	}
@@ -339,7 +329,7 @@ func cmdCleanupBranch(args []string) {
 	cfg := loadConfigOrFatal()
 	projects := discoverOrFatal(cfg)
 
-	p, ok := findProject(projects, projectName)
+	p, ok := discovery.Find(projects, projectName)
 	if !ok {
 		fatal(fmt.Sprintf("project not found: %s", projectName))
 	}

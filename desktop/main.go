@@ -98,6 +98,19 @@ type UpdateRequest struct {
 	Projects []string `json:"projects"`
 }
 
+// projectPath finds a discovered project's folder by name.
+func (a *App) projectPath(name string) (string, error) {
+	projects, err := discovery.DiscoverProjects(a.cfg.BaseFolder, a.cfg.ExcludedProjects)
+	if err != nil {
+		return "", err
+	}
+	p, ok := discovery.Find(projects, name)
+	if !ok {
+		return "", fmt.Errorf("project %s not found", name)
+	}
+	return p.Path, nil
+}
+
 func (a *App) StartUpdate(req UpdateRequest) {
 	a.mu.Lock()
 	if a.sem == nil {
@@ -126,7 +139,7 @@ func (a *App) StartUpdate(req UpdateRequest) {
 		ctx         context.Context
 	}
 
-	projects, _ := discovery.DiscoverProjects(a.cfg.BaseFolder, a.cfg.ExcludedProjects)
+	projects, err := discovery.DiscoverProjects(a.cfg.BaseFolder, a.cfg.ExcludedProjects)
 	var jobs []job
 	for _, projectName := range req.Projects {
 		a.mu.Lock()
@@ -135,16 +148,16 @@ func (a *App) StartUpdate(req UpdateRequest) {
 		if busy {
 			continue // already running: never start a second session for the same project
 		}
-		var projectPath string
-		for _, p := range projects {
-			if p.Name == projectName {
-				projectPath = p.Path
-				break
+		p, ok := discovery.Find(projects, projectName)
+		if !ok {
+			msg := fmt.Sprintf("project %s not found in %s", projectName, a.cfg.BaseFolder)
+			if err != nil {
+				msg = err.Error()
 			}
-		}
-		if projectPath == "" {
+			runtime.EventsEmit(a.ctx, "status-update", map[string]string{"project": projectName, "status": "failed", "command": "discover", "output": msg})
 			continue
 		}
+		projectPath := p.Path
 
 		pCfg := a.cfg.Projects[projectName]
 		pCfg.MergeWithDefaults(a.cfg)
@@ -226,16 +239,9 @@ func (a *App) CancelProject(name string) {
 }
 
 func (a *App) RenameBranch(projectName, finalBranch string) error {
-	projects, _ := discovery.DiscoverProjects(a.cfg.BaseFolder, a.cfg.ExcludedProjects)
-	var projectPath string
-	for _, p := range projects {
-		if p.Name == projectName {
-			projectPath = p.Path
-			break
-		}
-	}
-	if projectPath == "" {
-		return fmt.Errorf("project %s not found", projectName)
+	projectPath, err := a.projectPath(projectName)
+	if err != nil {
+		return err
 	}
 
 	tempBranch := executor.TempBranch(projectName)
@@ -251,16 +257,9 @@ func (a *App) RetryProjects(projectNames []string) {
 }
 
 func (a *App) CleanupBranch(projectName string) error {
-	projects, _ := discovery.DiscoverProjects(a.cfg.BaseFolder, a.cfg.ExcludedProjects)
-	var projectPath string
-	for _, p := range projects {
-		if p.Name == projectName {
-			projectPath = p.Path
-			break
-		}
-	}
-	if projectPath == "" {
-		return fmt.Errorf("project %s not found", projectName)
+	projectPath, err := a.projectPath(projectName)
+	if err != nil {
+		return err
 	}
 
 	pCfg := a.cfg.Projects[projectName]
