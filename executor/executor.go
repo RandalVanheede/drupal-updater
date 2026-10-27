@@ -166,12 +166,10 @@ func RenameBranch(projectPath, oldBranch, newBranch string) error {
 	if err := check.Run(); err != nil {
 		return fmt.Errorf("invalid branch name %q", newBranch)
 	}
-	return withRunGitConfig(projectPath, func() error {
-		if out, err := git(projectPath, "branch", "-m", "--", oldBranch, newBranch); err != nil {
-			return fmt.Errorf("git branch -m failed: %v\n%s", err, out)
-		}
-		return nil
-	})
+	if out, err := git(projectPath, "branch", "-m", "--", oldBranch, newBranch); err != nil {
+		return fmt.Errorf("git branch -m failed: %v\n%s", err, out)
+	}
+	return nil
 }
 
 // Cleanup returns the project to startBranch (stashing a dirty tree if needed)
@@ -181,18 +179,16 @@ func Cleanup(projectPath, startBranch, tempBranch string) error {
 	if !safeBranch.MatchString(startBranch) || (tempBranch != "" && !safeBranch.MatchString(tempBranch)) {
 		return fmt.Errorf("refusing unsafe branch name %q / %q", startBranch, tempBranch)
 	}
-	return withRunGitConfig(projectPath, func() error {
-		if _, err := git(projectPath, "checkout", startBranch, "--"); err != nil {
-			git(projectPath, "stash", "push", "-u", "-m", stashMsg)
-			if out, err := git(projectPath, "checkout", startBranch, "--"); err != nil {
-				return fmt.Errorf("git checkout %s failed: %v\n%s", startBranch, err, out)
-			}
+	if _, err := git(projectPath, "checkout", startBranch, "--"); err != nil {
+		git(projectPath, "stash", "push", "-u", "-m", stashMsg)
+		if out, err := git(projectPath, "checkout", startBranch, "--"); err != nil {
+			return fmt.Errorf("git checkout %s failed: %v\n%s", startBranch, err, out)
 		}
-		if tempBranch != "" {
-			git(projectPath, "branch", "-D", "--", tempBranch) // best-effort: may not exist
-		}
-		return nil
-	})
+	}
+	if tempBranch != "" {
+		git(projectPath, "branch", "-D", "--", tempBranch) // best-effort: may not exist
+	}
+	return nil
 }
 
 // BuildCommands expands every "git pull*" command into: checkout start branch,

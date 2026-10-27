@@ -99,7 +99,7 @@ Each match becomes a selectable project in the TUI.
 ## Claude mode (default)
 
 Each project's update runs in a detached tmux session (`du-<project>`) with `claude --model sonnet`.
-The app only starts the session, waits for `~/.config/drupal-updater/runs/<project>/out/result.json` (the only run folder Claude may write to), verifies the
+The app only starts the session, waits for `~/.config/drupal-updater/runs/<project>/out/result.json`, verifies the
 repo is on the temp branch, and cleans up on failure. Attach with `tmux -L drupal-updater attach -t du-<project>` (private tmux socket; tmux is bundled in the .app by `scripts/bundle-tmux.sh`).
 
 ```yaml
@@ -107,17 +107,15 @@ mode: claude                    # or "classic" (shell commands + auto-heal in Go
 claude_model: sonnet            # always passed via --model
 claude_prompt: "..."            # template; default is executor.DefaultClaudePrompt
                                 # placeholders: {{project}} {{path}} {{start_branch}} {{temp_branch}} {{commands}} {{result_file}}
-claude_allowed_tools: []        # default: Read Grep Glob and an explicit git/ddev subcommand list (see executor/claude.go); Edit/Write are always added, scoped to the project
+claude_allowed_tools: []        # default: all tools (Read Grep Glob Edit Write Bash WebFetch WebSearch)
 claude_permission_mode: dontAsk # unlisted tools are denied, never prompt
 claude_timeout_minutes: 60
 ```
 
-Claude's `git` and `ddev` resolve to read-only shims in `runs/<project>/bin` that run the app's hidden `guard` subcommand (`executor/guard.go`):
-- **git**: only the subcommands an update needs, no global options, no option (in any abbreviation) that runs programs, writes outside the repo or reaches other repositories; fetch/pull only from configured remotes.
-- **ddev**: refused when a host-executing `.ddev` file (`commands/host/`, `providers/`, `config*.yaml`, `docker-compose*.yaml`, symlinks included) has content seen neither at run start nor on a remote branch fetched at run start or by the guard's own fetch/pull, e.g. after code in a container rewrote it. Checked per file, so local-only files and pulled updates mix; files ddev regenerates (`#ddev-generated`) are re-trusted after `ddev start`. Refs are never trusted live.
-- **ddev** also refuses `delete` and data-destroying flags (`--reset-database`, `-R/--remove-data`, `-O/--omit-snapshot`, `-C/--cleanup`, `-a/--all`), including inside grouped short flags.
-- **both**: refused outside the project folder, or when `.git/config` changed other than through `branch.*` updates by git itself. The app's own post-run git operations (rename, cleanup, branch check) apply the same config check. Git hooks and fsmonitor are always off for Claude's git and the app's own git calls (`.git` is writable from the containers).
+The agent works autonomously with every tool. Hard limits, enforced twice (permission deny rules, and read-only `git`/`ddev` shims in `runs/<project>/bin` that run the app's hidden `guard` subcommand, `executor/guard.go`, which also catches aliases, global options and grouped flags):
+- **No commits, merges or pushes**: `git commit/merge/push/cherry-pick/revert/am`, and `git pull` without `--rebase`/`--ff-only`.
+- **No destroying local work or data**: `git reset --hard`, `git clean`, `git stash drop/clear`, `ddev delete/clean`, `--reset-database`, `-R/--remove-data`, `snapshot -C/--cleanup`.
 
-Always denied: `git push`, `git reset --hard`, `git clean`, forced git commands. MCP servers and the repo's own `.claude/` settings (hooks, permissions) are disabled in these sessions.
+These stop mistakes, not a determined agent (git called by full path skips the shim). MCP servers and the repo's own `.claude/` settings are disabled in these sessions.
 A project folder must be trusted by Claude once (run `claude` in it); otherwise the run fails with that instruction.
 Integration tests (real Claude): `DU_E2E_DIR=<trusted dir> go test -tags integration ./executor`.

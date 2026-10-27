@@ -24,14 +24,14 @@ const (
 
 // DefaultClaudePrompt is used when claude_prompt is not set in the config.
 // Placeholders: {{project}} {{path}} {{start_branch}} {{temp_branch}} {{ignored_packages}}
-// {{project_instructions}} {{import_db}} {{result_file}} and {{commands}} (the classic command list).
+// {{project_instructions}} {{result_file}} and {{commands}} (the classic command list).
 const DefaultClaudePrompt = `You are updating the Drupal project "{{project}}" located at {{path}} (your working directory). Work fully autonomously: nobody is watching, so never ask questions.
 
 Branches:
 - Start branch: {{start_branch}}. If it does not exist locally, use the repository's real default branch (origin/HEAD, else main/master).
 - Temp branch: {{temp_branch}}. All work happens on this branch.
 
-Steps, in order. Run one command per tool call (do not chain commands with ; or &&):
+Steps, in order:
 1. git checkout {{start_branch}}, then git pull --rebase --autostash
 2. git checkout -B {{temp_branch}} (this also resets the branch if it already exists)
 3. Make sure ddev is running: ddev describe, and ddev start if it is not
@@ -49,86 +49,34 @@ Solve simple problems yourself and retry, for example:
 - branch has no upstream: set it with --set-upstream-to
 - temp branch already exists, wrong default branch name, ddev router/network race, transient network errors: retry (up to 3 times)
 - autostash pop conflict on a local-only config file (e.g. .ddev/*): keep the upstream version (git checkout -- <file>) and continue, but never drop that stash: it holds the user's own local edits (the app prunes old drupal-updater stashes itself). Mention the stash in the summary.
-- ddev refuses to start because the existing database type/version differs from .ddev/config.yaml (e.g. the volume holds mysql:8.0, config says mariadb:10.11): convert it to the configured one with ddev utility migrate-database <type>:<version from config.yaml>; it keeps the data. Never reset or delete the database.
-- ddev refuses to start because upstream renamed the project (name in .ddev/config.yaml differs from the one registered for this directory): ddev stop --unlist <old-name>, then ddev start. Then check the site boots (ddev drush status). If the database is missing or empty afterwards, try to restore one yourself: ddev snapshot restore --latest, ddev pull if configured, or a recent dump in the project root or ./db via {{import_db}} <file> (the only permitted way to import; it rejects other locations and dumps older than 30 days). Report failure only if none works.
+- ddev refuses to start because the existing database type/version differs from .ddev/config.yaml (e.g. the volume holds mysql:8.0, config says mariadb:10.11): convert the data to the configured type. ddev utility migrate-database needs the config to match the current volume first, so: ddev config --database=<volume type:version>, then ddev utility migrate-database <configured type:version> (it keeps the data and writes the configured type back). Afterwards make sure .ddev/config.yaml equals the upstream version again (git diff .ddev/config.yaml). Never reset or delete the database.
+- ddev refuses to start because upstream renamed the project (name in .ddev/config.yaml differs from the one registered for this directory): ddev stop --unlist <old-name>, then ddev start. Then check the site boots (ddev drush status). If the database is missing or empty afterwards, try to restore one yourself: ddev snapshot restore --latest, ddev pull if configured, or a recent dump in the project via ddev import-db --file=<file>. Report failure only if none works.
 Be persistent. Diagnose every problem (read the error, inspect state, check logs) and fix it yourself, including composer conflicts, merge/stash conflicts, ddev/docker issues, config import errors and failing update hooks. Try several different approaches before giving up. Only report failure when the problem truly needs a human: missing credentials or access, a decision only the owner can make, or an action you are not permitted to take (see Rules). When you do fail, say exactly what you tried and what is needed.
 
-Rules:
-- Do NOT commit. Leave the changes uncommitted on the temp branch.
-- NEVER run git push, git reset --hard, git clean, or force flags. Never delete any branch except {{temp_branch}}.
-- Do not edit files other than what the steps above change (composer.json/lock, config sync files).
+Rules (enforced; refused commands explain what to do instead):
+- Do NOT commit, merge or push. Leave the changes uncommitted on the temp branch.
+- Never throw away local work or data: no git reset --hard, git clean, git stash drop/clear, ddev delete/clean, --reset-database, --remove-data or snapshot cleanup. Never delete any branch except {{temp_branch}}.
+- Keep the changes to what the update needs; local environment fixes (.ddev, database) are fine.
 
 Finish by writing the file {{result_file}} containing JSON only:
 {"status": "success" | "failed", "summary": "<one or two sentences: what was updated, or what failed and why>"}
 On success you must be on branch {{temp_branch}} when you write it. On failure, first return to the start branch (stash a dirty tree if needed) and delete {{temp_branch}}, then write the file.`
 
-// Edit/Write are added per run, scoped to the project and the result folder: a bare "Edit"/"Write" allows writes anywhere (~/.zprofile, ~/.claude).
-// git/ddev are an explicit subcommand list: "git *"/"ddev *" kept leaking escapes (global options, add-ons, host commands) past the deny list.
-var defaultClaudeAllowed = []string{
-	"Read", "Grep", "Glob", "Bash(sleep *)",
-	"Bash(git status*)", "Bash(git log*)", "Bash(git diff*)", "Bash(git show*)", "Bash(git rev-parse*)", "Bash(git symbolic-ref*)",
-	"Bash(git branch*)", "Bash(git checkout*)", "Bash(git switch*)", "Bash(git stash*)",
-	// network/history commands only in exact forms against origin: open-ended args let in other remotes (host aliases) or -x clusters
-	"Bash(git fetch)", "Bash(git fetch origin)", "Bash(git fetch --prune)", "Bash(git fetch origin *)",
-	"Bash(git pull)", "Bash(git pull --rebase)", "Bash(git pull --rebase --autostash)", "Bash(git pull --rebase --autostash origin *)", "Bash(git pull origin *)",
-	"Bash(git remote)", "Bash(git remote -v)", "Bash(git remote show origin)", "Bash(git remote get-url origin)",
-	"Bash(git merge --abort)", "Bash(git merge --continue)", "Bash(git rebase --abort)", "Bash(git rebase --continue)", "Bash(git rebase --skip)",
-	"Bash(git add*)", "Bash(git commit*)", "Bash(git restore*)",
-	"Bash(ddev describe*)", "Bash(ddev start*)", "Bash(ddev stop)", "Bash(ddev stop --unlist *)", "Bash(ddev restart*)", "Bash(ddev list*)", "Bash(ddev logs*)",
-	"Bash(ddev poweroff*)", "Bash(ddev snapshot)", "Bash(ddev snapshot --name *)", "Bash(ddev snapshot --list)", "Bash(ddev snapshot restore *)", "Bash(ddev pull*)", "Bash(ddev utility migrate-database *)",
-	"Bash(ddev composer install*)", "Bash(ddev composer update*)", "Bash(ddev composer require*)", "Bash(ddev composer remove*)",
-	"Bash(ddev composer show*)", "Bash(ddev composer why*)", "Bash(ddev composer depends*)", "Bash(ddev composer prohibits*)",
-	"Bash(ddev composer outdated*)", "Bash(ddev composer validate*)", "Bash(ddev composer diagnose*)", "Bash(ddev composer audit*)",
-	"Bash(ddev drush deploy*)", "Bash(ddev drush updb*)", "Bash(ddev drush updatedb*)", "Bash(ddev drush cex*)", "Bash(ddev drush config:export*)",
-	"Bash(ddev drush cim*)", "Bash(ddev drush config:import*)", "Bash(ddev drush config:status*)", "Bash(ddev drush cst*)",
-	"Bash(ddev drush cr*)", "Bash(ddev drush cache:rebuild*)", "Bash(ddev drush status*)", "Bash(ddev drush st)", "Bash(ddev drush st *)",
-	"Bash(ddev drush pm:list*)", "Bash(ddev drush pml*)", "Bash(ddev drush watchdog:show*)", "Bash(ddev drush ws*)",
-}
+// The agent works autonomously with every tool; the hard limits live in claudeDenied and in the
+// git/ddev guard shims (guard.go), which also catch forms these globs miss.
+var defaultClaudeAllowed = []string{"Read", "Grep", "Glob", "Edit", "Write", "Bash", "WebFetch", "WebSearch"}
 
 // ClaudeDefaults exposes the built-in prompt and allowlist for settings screens.
 func ClaudeDefaults() (prompt string, allowedTools []string) {
 	return DefaultClaudePrompt, append([]string(nil), defaultClaudeAllowed...)
 }
 
-// Always denied, regardless of config: these are never part of an update.
+// Always denied, regardless of config: no commits/merges/pushes, nothing that destroys local work or data.
 var claudeDenied = []string{
-	"Bash(git push*)", "Bash(git reset --hard*)", "Bash(git clean*)", "Bash(git * --force*)", "Bash(git * -f *)",
-	// arbitrary-code escape hatches the wildcard allows would otherwise grant
-	"Bash(git -c*)", "Bash(git * -c *)", "Bash(git config*)", "Bash(git submodule*)",
-	"Bash(composer exec*)", "Bash(composer run*)", "Bash(composer global*)", "Bash(composer config*)",
-	"Bash(ddev exec*)", "Bash(ddev ssh*)", "Bash(ddev import-db*)", "Bash(ddev config*)",
-	"Bash(git bisect*)", "Bash(git difftool*)", "Bash(git mergetool*)", "Bash(git * --exec*)", "Bash(git * -x*)", "Bash(git * --upload-pack*)", "Bash(git * --output*)", "Bash(git * --ou*)", "Bash(git * --upl*)", "Bash(git * --ex*)", // git accepts abbreviated options; --output writes any file
-	// only the repo's existing remotes: a new URL could bring in .ddev host commands via checkout/merge
-	"Bash(git * *://*)", "Bash(git * *@*.*)", "Bash(git * /*)", "Bash(git * ./*)", "Bash(git * ../*)", // no ":" in patterns: it is the legacy prefix syntax
-	"Bash(git grep*)", "Bash(git * grep*)", "Bash(git * -O*)", "Bash(git * --open-files-in-pager*)", // grep -O runs a pager program
-	"Bash(git --config-env*)", "Bash(git * --config-env*)", "Bash(git -C*)", "Bash(git --exec-path*)", "Bash(git --git-dir*)", "Bash(git --work-tree*)",
-	"Bash(git * --exec-path*)", "Bash(git * --git-dir*)", "Bash(git * --work-tree*)", "Bash(git * -C *)",
-	"Bash(git --bare*)", "Bash(git * --bare*)", "Bash(git apply*)", "Bash(git am*)", // can write files outside Edit rules (.ddev/)
-	"Bash(ddev add-on*)", "Bash(ddev get*)", "Bash(ddev dotenv*)", // install/modify .ddev, incl. host commands
-	"Bash(ddev * --reset-database*)", "Bash(ddev * --remove-data*)", "Bash(ddev * --omit-snapshot*)", "Bash(ddev * -R*)",
-	"Bash(ddev snapshot -C*)", "Bash(ddev snapshot * -C*)", "Bash(ddev snapshot --cleanup*)", "Bash(ddev snapshot * --cleanup*)", "Bash(ddev delete*)", // destroy the local database or its snapshots
-	"Edit(.ddev/**)", "Edit(**/.ddev/**)", // host commands (.ddev/commands/host) and exec-host hooks would run on the host via "ddev *"
-	"Bash(ddev composer exec*)", "Bash(ddev composer run*)", "Bash(ddev mysql*)", "Bash(ddev launch*)",
-	"Edit(.git/**)", "Edit(**/.git/**)", // Edit rules cover Write too; ** form also matches via a symlinked path
-	"Bash(drush php*)", "Bash(drush ev*)", "Bash(drush sql*)", "Bash(ddev drush php*)", "Bash(ddev drush ev*)", "Bash(ddev drush sql*)",
+	"Bash(git commit*)", "Bash(git merge*)", "Bash(git push*)", "Bash(git cherry-pick*)", "Bash(git revert*)", "Bash(git am*)",
+	"Bash(git reset --hard*)", "Bash(git clean*)", "Bash(git stash drop*)", "Bash(git stash clear*)",
+	"Bash(ddev delete*)", "Bash(ddev clean*)", "Bash(ddev * --reset-database*)", "Bash(ddev * --remove-data*)", "Bash(ddev snapshot --cleanup*)",
 }
-
-// importDBScript is the only way Claude may import a database: ddev import-db stays denied, this wrapper
-// accepts only a recent dump (regular file, no symlink) that sits in the project root or ./db.
-const importDBScript = `#!/bin/sh
-ROOT=%s
-DAYS=%d
-[ $# -eq 1 ] || { echo "usage: import-db.sh <dump file>" >&2; exit 2; }
-f=$1
-{ [ -f "$f" ] && [ ! -L "$f" ]; } || { echo "not a regular file: $f" >&2; exit 1; }
-d=$(cd "$(dirname "$f")" && pwd -P) || exit 1
-case "$d" in "$ROOT"|"$ROOT/db") ;; *) echo "dump must be in the project root or ./db" >&2; exit 1;; esac
-case "$f" in *.sql|*.sql.gz|*.sql.zip|*.sql.xz|*.sql.bz2|*.mysql|*.mysql.gz) ;; *) echo "unsupported dump extension" >&2; exit 1;; esac
-[ -n "$(find "$f" -mtime -"$DAYS")" ] || { echo "dump is older than $DAYS days" >&2; exit 1; }
-cd "$ROOT" && exec ddev import-db --file="$d/$(basename "$f")"
-`
-
-const dumpMaxAgeDays = 30
 
 var claudeCfg struct {
 	enabled    bool
@@ -284,7 +232,7 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 		fail(err.Error())
 		return
 	}
-	outDir := filepath.Join(runDir, "out") // the only run folder Claude may write to; run.sh/import-db.sh stay out of reach
+	outDir := filepath.Join(runDir, "out") // added via --add-dir so Claude can write the result file
 	resultFile := filepath.Join(outDir, "result.json")
 	turnFile := filepath.Join(runDir, "turn-done")
 	exitFile := filepath.Join(runDir, "exit")
@@ -301,7 +249,6 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 		logging.Error("[%s] could not pre-trust folder: %v", name, err) // falls back to the trust-prompt detection below
 	}
 
-	importDB := filepath.Join(runDir, "import-db.sh")
 	numbered := make([]string, len(commands))
 	for i, c := range commands {
 		numbered[i] = fmt.Sprintf("%d. %s", i+1, c)
@@ -316,7 +263,7 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 	}
 	prompt := strings.NewReplacer(
 		"{{ignored_packages}}", ignored, "{{project_instructions}}", proj.ClaudeInstructions,
-		"{{import_db}}", importDB, "{{project}}", name, "{{path}}", path, "{{start_branch}}", startBranch,
+		"{{project}}", name, "{{path}}", path, "{{start_branch}}", startBranch,
 		"{{temp_branch}}", tempBranch, "{{commands}}", strings.Join(numbered, "\n"), "{{result_file}}", resultFile,
 	).Replace(claudeCfg.prompt)
 
@@ -324,22 +271,10 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 		"hooks": []any{map[string]any{"type": "command", "command": "touch " + sq(turnFile)}},
 	}}}}
 	settingsJSON, _ := json.Marshal(settings)
-	root := path
-	if r, err := filepath.EvalSymlinks(path); err == nil {
-		root = r
-	}
-	allowed := append(append([]string(nil), claudeCfg.allowed...), "Bash("+importDB+" *)", "Edit(/"+root+"/**)", "Edit(/"+outDir+"/**)")
-	if root != path {
-		allowed = append(allowed, "Edit(/"+path+"/**)")
-	}
-	denied := append([]string(nil), claudeDenied...)
-	for _, f := range []string{"run.sh", "import-db.sh", "settings.json", "prompt.md", "bin/git", "bin/ddev", ddevTrustedFile, gitConfigFile} {
-		denied = append(denied, "Edit(/"+filepath.Join(runDir, f)+")") // "//" = absolute path; Edit rules cover Write too
-	}
 	// --setting-sources user: the repo is auto-trusted, so never load hooks/permissions from its .claude/ settings.
 	script := fmt.Sprintf("#!/bin/sh\ncd %s || exit 1\nPATH=%s:\"$PATH\"; export PATH # git/ddev resolve to the guard shims\nclaude --model %s --strict-mcp-config --setting-sources user --permission-mode %s --settings %s --add-dir %s --allowedTools=%s --disallowedTools=%s \"$(cat %s)\"\necho $? > %s\n",
 		sq(path), sq(filepath.Join(runDir, "bin")), sq(claudeCfg.model), sq(claudeCfg.permission), sq(filepath.Join(runDir, "settings.json")), sq(outDir),
-		sq(strings.Join(allowed, ",")), sq(strings.Join(denied, ",")), sq(filepath.Join(runDir, "prompt.md")), sq(exitFile))
+		sq(strings.Join(claudeCfg.allowed, ",")), sq(strings.Join(claudeDenied, ",")), sq(filepath.Join(runDir, "prompt.md")), sq(exitFile))
 	exe, err := os.Executable()
 	if err != nil {
 		fail("cannot locate own binary for the git/ddev guard: " + err.Error())
@@ -354,17 +289,12 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 		fail(err.Error())
 		return
 	}
-	if err := writeGuardState(realGit, path, runDir); err != nil {
-		fail("cannot record .ddev/git state for the guard: " + err.Error())
-		return
-	}
 	files := map[string]string{"prompt.md": prompt, "settings.json": string(settingsJSON), "run.sh": script,
-		"import-db.sh": fmt.Sprintf(importDBScript, sq(root), dumpMaxAgeDays),
-		"bin/git":      fmt.Sprintf("#!/bin/sh\nDRUPAL_UPDATER_PROJECT=%s DRUPAL_UPDATER_GIT=%s exec %s guard git %s %s \"$@\"\n", sq(path), sq(realGit), sq(exe), sq(realGit), sq(runDir)),
-		"bin/ddev":     fmt.Sprintf("#!/bin/sh\nDRUPAL_UPDATER_PROJECT=%s DRUPAL_UPDATER_GIT=%s exec %s guard ddev %s %s \"$@\"\n", sq(path), sq(realGit), sq(exe), sq(realDdev), sq(runDir))}
+		"bin/git":  fmt.Sprintf("#!/bin/sh\nexec %s guard git %s \"$@\"\n", sq(exe), sq(realGit)),
+		"bin/ddev": fmt.Sprintf("#!/bin/sh\nexec %s guard ddev %s \"$@\"\n", sq(exe), sq(realDdev))}
 	for f, content := range files {
 		perm := os.FileMode(0o444) // read-only, so a shell redirect can't rewrite them either
-		if f == "import-db.sh" || strings.HasPrefix(f, "bin/") {
+		if strings.HasPrefix(f, "bin/") {
 			perm = 0o555
 		}
 		os.Remove(filepath.Join(runDir, f)) // earlier run's copy is read-only
@@ -409,10 +339,6 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 				return
 			}
 			if tempBranch != "" {
-				if err := checkGitConfig(realGit, path, runDir); err != nil {
-					fail("Claude reported success, but " + err.Error())
-					return
-				}
 				if cur, _ := git(path, "branch", "--show-current"); strings.TrimSpace(cur) != tempBranch {
 					fail(fmt.Sprintf("Claude reported success but repo is on %q, expected %q", strings.TrimSpace(cur), tempBranch))
 					return
