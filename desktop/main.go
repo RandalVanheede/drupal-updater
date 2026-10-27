@@ -174,6 +174,12 @@ func (a *App) StartUpdate(req UpdateRequest) {
 		jobs = append(jobs, job{name: projectName, path: projectPath, startBranch: startBranch, tempBranch: tempBranch, commands: commands, ctx: ctx})
 	}
 	if len(jobs) == 0 {
+		a.mu.Lock()
+		idle := a.pending == 0
+		a.mu.Unlock()
+		if idle { // nothing could start (e.g. discovery failed): still let the UI leave the running view
+			runtime.EventsEmit(a.ctx, "all-done", nil)
+		}
 		return
 	}
 

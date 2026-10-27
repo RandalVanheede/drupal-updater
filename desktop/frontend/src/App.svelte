@@ -11,6 +11,7 @@
 
   let statuses = $state({});
   let logs = $state({});
+  let notStarted = {}; // projects that failed before running (discovery), so confirm must not clean up their branch
   let allDone = $state(false);
   let detailProject = $state('');
 
@@ -33,6 +34,7 @@
       if (!name) return;
       statuses[name] = update.status || update.Status;
       const cmd = update.command || update.Command;
+      if (cmd === 'discover') notStarted[name] = true; // never ran: no temp branch of this run to clean up
       const out = update.output || update.Output;
       if (out) {
         logs[name] += cmd + '\n' + out + '\n';
@@ -88,7 +90,7 @@
   }
 
   function sanitize(name) {
-    return name.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/^-+|-+$/g, '');
+    return name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
   }
 
   function startUpdate() {
@@ -105,6 +107,7 @@
     const keptLogs = Object.fromEntries(keep.map(n => [n, logs[n]]));
     statuses = kept;
     logs = keptLogs;
+    selectedNames.forEach(n => delete notStarted[n]);
     allDone = false;
     confirmDone = false;
     confirmResults = {};
@@ -169,7 +172,9 @@
     confirmResults = {};
     for (const name of Object.keys(statuses)) {
       try {
-        if (statuses[name] === 'success') {
+        if (notStarted[name]) {
+          confirmResults[name] = '– not started';
+        } else if (statuses[name] === 'success') {
           await RenameBranch(name, branchNames[name]);
           confirmResults[name] = '✓ renamed';
         } else {
@@ -192,6 +197,7 @@
 
     failed.forEach(name => {
       statuses[name] = 'idle';
+      delete notStarted[name];
       logs[name] = '';
     });
 
