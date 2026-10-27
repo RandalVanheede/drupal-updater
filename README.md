@@ -114,7 +114,8 @@ claude_timeout_minutes: 60
 
 Claude's `git` and `ddev` resolve to read-only shims in `runs/<project>/bin` that run the app's hidden `guard` subcommand (`executor/guard.go`):
 - **git**: only the subcommands an update needs, no global options, no option (in any abbreviation) that runs programs, writes outside the repo or reaches other repositories; fetch/pull only from configured remotes.
-- **ddev**: refused once the host-executing `.ddev` files (`commands/host/`, `providers/`, `config*.yaml`, `docker-compose*.yaml`) differ from both the state at run start and every remote-tracking branch, e.g. after code in a container rewrote them. Upstream changes pulled during the run are accepted.
+- **ddev**: refused once the host-executing `.ddev` files (`commands/host/`, `providers/`, `config*.yaml`, `docker-compose*.yaml`, symlinks included) differ from the state at run start and from every remote branch fetched at run start or by the guard's own fetch/pull, e.g. after code in a container rewrote them. Refs are never trusted live.
+- **both**: refused outside the project folder, or when `.git/config` changed other than through the guard's own git calls. Git hooks are always off for Claude's git and the app's own git calls (`.git` is writable from the containers).
 
 Always denied: `git push`, `git reset --hard`, `git clean`, forced git commands. MCP servers and the repo's own `.claude/` settings (hooks, permissions) are disabled in these sessions.
 A project folder must be trusted by Claude once (run `claude` in it); otherwise the run fails with that instruction.

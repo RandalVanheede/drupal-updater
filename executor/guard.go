@@ -16,29 +16,45 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"drupal-updater/logging"
 )
 
 // Claude's git and ddev calls go through read-only shims in <runDir>/bin that run the hidden
 // "guard" subcommand: permission globs can't parse git's argv, and code running inside the ddev
 // containers can rewrite .ddev, whose host commands and hooks ddev runs on the host.
 
-const ddevBaselineFile = "ddev-baseline.json"
+const (
+	ddevTrustedFile = "ddev-trusted.json" // host-executing .ddev states ddev may run with
+	gitConfigFile   = "git-config"        // the repo's local git config as last seen by the guard
+)
 
 // Guard handles `<exe> guard git|ddev <real binary> <run dir> <args...>` and returns the exit code.
+// The shims also pass DRUPAL_UPDATER_PROJECT (project root) and DRUPAL_UPDATER_GIT (real git).
 func Guard(args []string) int {
-	if len(args) < 3 || !filepath.IsAbs(args[1]) {
-		fmt.Fprintln(os.Stderr, "drupal-updater guard: usage: guard git|ddev <absolute binary> <run dir> [args...]")
+	root, git := os.Getenv("DRUPAL_UPDATER_PROJECT"), os.Getenv("DRUPAL_UPDATER_GIT")
+	if len(args) < 3 || !filepath.IsAbs(args[1]) || !filepath.IsAbs(root) || !filepath.IsAbs(git) {
+		fmt.Fprintln(os.Stderr, "drupal-updater guard: usage: guard git|ddev <absolute binary> <run dir> [args...] (run via the shims)")
 		return 2
 	}
 	tool, real, runDir, rest := args[0], args[1], args[2], args[3:]
-	var err error
-	switch tool {
-	case "git":
-		err = checkGitArgs(rest, gitRemotes(real))
-	case "ddev":
-		err = checkDdev(runDir)
-	default:
-		err = fmt.Errorf("unknown tool %q", tool)
+	var sub string
+	err := checkCwd(root)
+	if err == nil {
+		// hooks/filters/url rewrites in .git/config would run on the host; .git is writable from the containers
+		err = checkGitConfig(git, root, runDir)
+	}
+	if err == nil {
+		switch tool {
+		case "git":
+			err = checkGitArgs(rest, gitRemotes(git, root))
+			sub = rest[0] // checked non-empty above
+			rest = append([]string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"}, rest...)
+		case "ddev":
+			err = checkDdev(root, runDir)
+		default:
+			err = fmt.Errorf("unknown tool %q", tool)
+		}
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "drupal-updater guard: refused: %v\n", err)
@@ -46,15 +62,81 @@ func Guard(args []string) int {
 	}
 	cmd := exec.Command(real, rest...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil {
+	runErr := cmd.Run()
+	if tool == "git" {
+		// git itself may legitimately change config (--set-upstream-to) and remote refs (fetch/pull).
+		// shortcut: a container write landing while this git runs is accepted too; tiny window, use inotify if it matters.
+		if err := saveGitConfig(git, root, runDir); err != nil {
+			fmt.Fprintf(os.Stderr, "drupal-updater guard: %v\n", err)
+		}
+		if sub == "fetch" || sub == "pull" {
+			if err := trustRemoteRefs(git, root, runDir); err != nil {
+				fmt.Fprintf(os.Stderr, "drupal-updater guard: %v\n", err)
+			}
+		}
+	}
+	if runErr != nil {
 		var exit *exec.ExitError
-		if errors.As(err, &exit) {
+		if errors.As(runErr, &exit) {
 			return exit.ExitCode()
 		}
-		fmt.Fprintf(os.Stderr, "drupal-updater guard: %v\n", err)
+		fmt.Fprintf(os.Stderr, "drupal-updater guard: %v\n", runErr)
 		return 127
 	}
 	return 0
+}
+
+// checkCwd refuses commands run outside the project: ddev would pick up another .ddev.
+func checkCwd(root string) error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	cwd, _ = filepath.EvalSymlinks(cwd)
+	r, _ := filepath.EvalSymlinks(root)
+	if rel, err := filepath.Rel(r, cwd); err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
+		return fmt.Errorf("must run inside the project %s (cwd is %s)", root, cwd)
+	}
+	return nil
+}
+
+func localGitConfig(git, root string) (string, error) {
+	cmd := exec.Command(git, "config", "--local", "--list")
+	cmd.Dir = root
+	out, err := cmd.Output()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+		return "", nil // no local config entries
+	}
+	return string(out), err
+}
+
+func checkGitConfig(git, root, runDir string) error {
+	current, err := localGitConfig(git, root)
+	if err != nil {
+		return fmt.Errorf("read git config: %w", err)
+	}
+	saved, err := os.ReadFile(filepath.Join(runDir, gitConfigFile))
+	if err != nil {
+		return fmt.Errorf("no git config snapshot: %w", err)
+	}
+	if current != string(saved) {
+		return errors.New(".git/config was changed outside git (possibly by code in a container); a human must review it")
+	}
+	return nil
+}
+
+func saveGitConfig(git, root, runDir string) error {
+	current, err := localGitConfig(git, root)
+	if err != nil {
+		return err
+	}
+	return writeReadOnly(filepath.Join(runDir, gitConfigFile), []byte(current))
+}
+
+func writeReadOnly(file string, data []byte) error {
+	os.Remove(file) // the previous copy is read-only
+	return os.WriteFile(file, data, 0o444)
 }
 
 var gitSubcommands = map[string]bool{
@@ -118,16 +200,21 @@ scan:
 	return nil
 }
 
-func gitRemotes(real string) []string {
-	out, _ := exec.Command(real, "remote").Output()
+func gitRemotes(git, root string) []string {
+	cmd := exec.Command(git, "remote")
+	cmd.Dir = root
+	out, _ := cmd.Output()
 	return strings.Fields(string(out))
 }
 
 // ddevSurface reports whether a project-relative path lets ddev run code on the host
 // (host commands, exec-host hooks, provider scripts, compose files that can mount host paths).
 func ddevSurface(rel string) bool {
-	if strings.HasPrefix(rel, ".ddev/commands/host/") || strings.HasPrefix(rel, ".ddev/providers/") {
+	switch {
+	case strings.HasPrefix(rel, ".ddev/commands/host/"), strings.HasPrefix(rel, ".ddev/providers/"):
 		return true
+	case rel == ".ddev/commands", rel == ".ddev/commands/host", rel == ".ddev/providers":
+		return true // only reached when not a real directory, e.g. a symlink pointing elsewhere
 	}
 	for _, pat := range []string{".ddev/config*.yaml", ".ddev/docker-compose*.yaml"} {
 		if ok, _ := path.Match(pat, rel); ok {
@@ -208,55 +295,89 @@ func treeSurface(real, projectDir, ref string) (map[string]string, error) {
 	return surface, nil
 }
 
-// checkDdev allows ddev only while the host-executing .ddev files match the run's start state or
-// the committed state of a remote-tracking branch (so pulling upstream changes still works).
-func checkDdev(runDir string) error {
-	projectDir, err := os.Getwd()
+// checkDdev allows ddev only while the host-executing .ddev files match a trusted state: the one at
+// run start, or a remote-tracking branch as fetched by the run start or by the guard's own fetch/pull.
+// Refs are never read live: code in a container could forge them.
+func checkDdev(root, runDir string) error {
+	current, err := workingSurface(root)
 	if err != nil {
 		return err
 	}
-	current, err := workingSurface(projectDir)
+	trusted, err := readTrusted(runDir)
 	if err != nil {
 		return err
 	}
-	var baseline map[string]string
-	if data, err := os.ReadFile(filepath.Join(runDir, ddevBaselineFile)); err == nil && json.Unmarshal(data, &baseline) == nil {
-		if maps.Equal(current, baseline) {
+	for _, t := range trusted {
+		if maps.Equal(current, t) {
 			return nil
-		}
-	}
-	if git := os.Getenv("DRUPAL_UPDATER_GIT"); filepath.IsAbs(git) { // set by the ddev shim: PATH would resolve to the git shim
-		cmd := exec.Command(git, "for-each-ref", "--count=200", "--format=%(refname)", "refs/remotes")
-		cmd.Dir = projectDir
-		out, _ := cmd.Output()
-		for _, ref := range strings.Fields(string(out)) {
-			if tree, err := treeSurface(git, projectDir, ref); err == nil && maps.Equal(current, tree) {
-				return nil
-			}
 		}
 	}
 	var changed []string
 	for f, sum := range current {
-		if baseline[f] != sum {
+		if trusted[0][f] != sum {
 			changed = append(changed, f)
 		}
 	}
-	for f := range baseline {
+	for f := range trusted[0] {
 		if _, ok := current[f]; !ok {
 			changed = append(changed, f+" (deleted)")
 		}
 	}
-	return fmt.Errorf("ddev: .ddev files that run on the host changed since the run started and match no upstream branch: %s. A human must review them", strings.Join(changed, ", "))
+	slices.Sort(changed)
+	return fmt.Errorf("ddev: .ddev files that run on the host changed since the run started and match no fetched upstream branch: %s. A human must review them", strings.Join(changed, ", "))
 }
 
-// writeDdevBaseline records the project's host-executing .ddev state at run start.
-func writeDdevBaseline(projectDir, runDir string) error {
-	surface, err := workingSurface(projectDir)
+func readTrusted(runDir string) ([]map[string]string, error) {
+	var trusted []map[string]string
+	data, err := os.ReadFile(filepath.Join(runDir, ddevTrustedFile))
+	if err == nil {
+		err = json.Unmarshal(data, &trusted)
+	}
+	if err == nil && len(trusted) == 0 {
+		err = errors.New("empty")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("no trusted .ddev state recorded: %w", err)
+	}
+	return trusted, nil
+}
+
+// trustRemoteRefs adds the .ddev state of every remote-tracking branch to the trusted list.
+func trustRemoteRefs(git, root, runDir string) error {
+	trusted, err := readTrusted(runDir)
 	if err != nil {
 		return err
 	}
-	data, _ := json.Marshal(surface)
-	file := filepath.Join(runDir, ddevBaselineFile)
-	os.Remove(file) // the previous run's copy is read-only
-	return os.WriteFile(file, data, 0o444)
+	cmd := exec.Command(git, "for-each-ref", "--count=200", "--format=%(refname)", "refs/remotes")
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		return err
+	}
+	for _, ref := range strings.Fields(string(out)) {
+		tree, err := treeSurface(git, root, ref)
+		if err != nil || slices.ContainsFunc(trusted, func(t map[string]string) bool { return maps.Equal(t, tree) }) {
+			continue
+		}
+		trusted = append(trusted, tree)
+	}
+	data, _ := json.Marshal(trusted)
+	return writeReadOnly(filepath.Join(runDir, ddevTrustedFile), data)
+}
+
+// writeGuardState records the run-start state the guard checks against: the working .ddev, the
+// .ddev of every remote-tracking branch, and the repo's local git config.
+func writeGuardState(git, root, runDir string) error {
+	start, err := workingSurface(root)
+	if err != nil {
+		return err
+	}
+	data, _ := json.Marshal([]map[string]string{start})
+	if err := writeReadOnly(filepath.Join(runDir, ddevTrustedFile), data); err != nil {
+		return err
+	}
+	if err := trustRemoteRefs(git, root, runDir); err != nil {
+		logging.Error("could not record remote .ddev states: %v", err) // not a git repo yet: run-start state only
+	}
+	return saveGitConfig(git, root, runDir)
 }

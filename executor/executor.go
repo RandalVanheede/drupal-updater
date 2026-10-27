@@ -102,7 +102,8 @@ func TempBranch(project string) string { return "drupal-updater/temp-" + BranchS
 
 // git runs git directly (no shell) so branch names can't inject commands.
 func git(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
+	// hooks off: .git is writable from the ddev containers, so a planted hook would run on the host
+	cmd := exec.Command("git", append([]string{"-c", "core.hooksPath=/dev/null"}, args...)...)
 	cmd.Dir = dir
 	cmd.Env = EnrichedEnv()
 	out, err := cmd.CombinedOutput()

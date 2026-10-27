@@ -323,7 +323,7 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 		allowed = append(allowed, "Edit(/"+path+"/**)")
 	}
 	denied := append([]string(nil), claudeDenied...)
-	for _, f := range []string{"run.sh", "import-db.sh", "settings.json", "prompt.md", "bin/git", "bin/ddev", ddevBaselineFile} {
+	for _, f := range []string{"run.sh", "import-db.sh", "settings.json", "prompt.md", "bin/git", "bin/ddev", ddevTrustedFile, gitConfigFile} {
 		denied = append(denied, "Edit(/"+filepath.Join(runDir, f)+")") // "//" = absolute path; Edit rules cover Write too
 	}
 	// --setting-sources user: the repo is auto-trusted, so never load hooks/permissions from its .claude/ settings.
@@ -344,14 +344,14 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 		fail(err.Error())
 		return
 	}
-	if err := writeDdevBaseline(path, runDir); err != nil {
-		fail("cannot record .ddev state: " + err.Error())
+	if err := writeGuardState(realGit, path, runDir); err != nil {
+		fail("cannot record .ddev/git state for the guard: " + err.Error())
 		return
 	}
 	files := map[string]string{"prompt.md": prompt, "settings.json": string(settingsJSON), "run.sh": script,
 		"import-db.sh": fmt.Sprintf(importDBScript, sq(root), dumpMaxAgeDays),
-		"bin/git":      fmt.Sprintf("#!/bin/sh\nexec %s guard git %s %s \"$@\"\n", sq(exe), sq(realGit), sq(runDir)),
-		"bin/ddev":     fmt.Sprintf("#!/bin/sh\nDRUPAL_UPDATER_GIT=%s exec %s guard ddev %s %s \"$@\"\n", sq(realGit), sq(exe), sq(realDdev), sq(runDir))}
+		"bin/git":      fmt.Sprintf("#!/bin/sh\nDRUPAL_UPDATER_PROJECT=%s DRUPAL_UPDATER_GIT=%s exec %s guard git %s %s \"$@\"\n", sq(path), sq(realGit), sq(exe), sq(realGit), sq(runDir)),
+		"bin/ddev":     fmt.Sprintf("#!/bin/sh\nDRUPAL_UPDATER_PROJECT=%s DRUPAL_UPDATER_GIT=%s exec %s guard ddev %s %s \"$@\"\n", sq(path), sq(realGit), sq(exe), sq(realDdev), sq(runDir))}
 	for f, content := range files {
 		perm := os.FileMode(0o444) // read-only, so a shell redirect can't rewrite them either
 		if f == "import-db.sh" || strings.HasPrefix(f, "bin/") {
