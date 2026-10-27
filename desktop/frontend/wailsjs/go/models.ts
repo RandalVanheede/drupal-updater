@@ -4,6 +4,7 @@ export namespace config {
 	    GitStartBranch: string;
 	    GitNewBranchPattern: string;
 	    IgnoredPackages: string[];
+	    SmokePaths: string[];
 	    Commands: string[];
 	    ClaudeInstructions: string;
 	
@@ -16,6 +17,7 @@ export namespace config {
 	        this.GitStartBranch = source["GitStartBranch"];
 	        this.GitNewBranchPattern = source["GitNewBranchPattern"];
 	        this.IgnoredPackages = source["IgnoredPackages"];
+	        this.SmokePaths = source["SmokePaths"];
 	        this.Commands = source["Commands"];
 	        this.ClaudeInstructions = source["ClaudeInstructions"];
 	    }
