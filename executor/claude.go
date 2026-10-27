@@ -62,9 +62,21 @@ Finish by writing the file {{result_file}} containing JSON only:
 On success you must be on branch {{temp_branch}} when you write it. On failure, first return to the start branch (stash a dirty tree if needed) and delete {{temp_branch}}, then write the file.`
 
 // Edit/Write are added per run, scoped to the project and the result folder: a bare "Edit"/"Write" allows writes anywhere (~/.zprofile, ~/.claude).
+// git/ddev are an explicit subcommand list: "git *"/"ddev *" kept leaking escapes (global options, add-ons, host commands) past the deny list.
 var defaultClaudeAllowed = []string{
-	"Read", "Grep", "Glob",
-	"Bash(git *)", "Bash(ddev *)", "Bash(sleep *)", // composer/drush only via ddev: host-side runs project scripts on the host
+	"Read", "Grep", "Glob", "Bash(sleep *)",
+	"Bash(git status*)", "Bash(git log*)", "Bash(git diff*)", "Bash(git show*)", "Bash(git rev-parse*)", "Bash(git symbolic-ref*)",
+	"Bash(git branch*)", "Bash(git checkout*)", "Bash(git switch*)", "Bash(git fetch*)", "Bash(git pull*)", "Bash(git stash*)",
+	"Bash(git remote*)", "Bash(git ls-remote*)", "Bash(git merge*)", "Bash(git rebase*)", "Bash(git add*)", "Bash(git commit*)", "Bash(git restore*)",
+	"Bash(ddev describe*)", "Bash(ddev start*)", "Bash(ddev stop*)", "Bash(ddev restart*)", "Bash(ddev list*)", "Bash(ddev logs*)",
+	"Bash(ddev poweroff*)", "Bash(ddev snapshot*)", "Bash(ddev pull*)",
+	"Bash(ddev composer install*)", "Bash(ddev composer update*)", "Bash(ddev composer require*)", "Bash(ddev composer remove*)",
+	"Bash(ddev composer show*)", "Bash(ddev composer why*)", "Bash(ddev composer depends*)", "Bash(ddev composer prohibits*)",
+	"Bash(ddev composer outdated*)", "Bash(ddev composer validate*)", "Bash(ddev composer diagnose*)", "Bash(ddev composer audit*)",
+	"Bash(ddev drush deploy*)", "Bash(ddev drush updb*)", "Bash(ddev drush updatedb*)", "Bash(ddev drush cex*)", "Bash(ddev drush config:export*)",
+	"Bash(ddev drush cim*)", "Bash(ddev drush config:import*)", "Bash(ddev drush config:status*)", "Bash(ddev drush cst*)",
+	"Bash(ddev drush cr*)", "Bash(ddev drush cache:rebuild*)", "Bash(ddev drush status*)", "Bash(ddev drush st)", "Bash(ddev drush st *)",
+	"Bash(ddev drush pm:list*)", "Bash(ddev drush pml*)", "Bash(ddev drush watchdog:show*)", "Bash(ddev drush ws*)",
 }
 
 // ClaudeDefaults exposes the built-in prompt and allowlist for settings screens.
@@ -79,7 +91,7 @@ var claudeDenied = []string{
 	"Bash(git -c*)", "Bash(git * -c *)", "Bash(git config*)", "Bash(git submodule*)",
 	"Bash(composer exec*)", "Bash(composer run*)", "Bash(composer global*)", "Bash(composer config*)",
 	"Bash(ddev exec*)", "Bash(ddev ssh*)", "Bash(ddev import-db*)", "Bash(ddev config*)",
-	"Bash(git bisect*)", "Bash(git difftool*)", "Bash(git mergetool*)", "Bash(git * --exec*)", "Bash(git * -x*)", "Bash(git * --upload-pack*)",
+	"Bash(git bisect*)", "Bash(git difftool*)", "Bash(git mergetool*)", "Bash(git * --exec*)", "Bash(git * -x*)", "Bash(git * --upload-pack*)", "Bash(git * --output*)", // --output writes any file
 	"Bash(git grep*)", "Bash(git * grep*)", "Bash(git * -O*)", "Bash(git * --open-files-in-pager*)", // grep -O runs a pager program
 	"Bash(git --config-env*)", "Bash(git * --config-env*)", "Bash(git -C*)", "Bash(git --exec-path*)", "Bash(git --git-dir*)", "Bash(git --work-tree*)",
 	"Bash(git * --exec-path*)", "Bash(git * --git-dir*)", "Bash(git * --work-tree*)", "Bash(git * -C *)",
