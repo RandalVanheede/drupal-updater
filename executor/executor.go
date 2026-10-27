@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,15 +26,16 @@ func loginShell() string {
 	return "/bin/sh"
 }
 
-// EnrichedEnv returns the current environment with common macOS binary paths
-// added to PATH and ensures SSH_AUTH_SOCK is available. This is needed because
-// GUI apps on macOS don't inherit the shell's PATH or SSH agent.
+// EnrichedEnv returns the current environment with common binary paths (Homebrew,
+// Linuxbrew, ~/.local/bin) added to PATH and ensures SSH_AUTH_SOCK is available.
+// This is needed because GUI apps on macOS don't inherit the shell's PATH or SSH agent.
 func EnrichedEnv() []string {
 	extraPaths := []string{
 		"/opt/homebrew/bin",
 		"/opt/homebrew/sbin",
 		"/usr/local/bin",
 		"/usr/local/sbin",
+		"/home/linuxbrew/.linuxbrew/bin",
 		os.Getenv("HOME") + "/.local/bin",
 	}
 	// Never let a tool wait on a prompt nobody can answer.
@@ -50,15 +52,11 @@ func EnrichedEnv() []string {
 		}
 	}
 
-	// If SSH_AUTH_SOCK is missing (common in macOS GUI apps), try to find it
-	if !hasSSHAuth {
-		// macOS launchd-managed agent socket
-		sock := "/tmp/com.apple.launchd." // common prefix, but varies
-		// Try the standard macOS SSH agent socket via launchctl
+	// If SSH_AUTH_SOCK is missing (common in macOS GUI apps), ask launchd; Linux desktop sessions already export it
+	if !hasSSHAuth && runtime.GOOS == "darwin" {
 		out, err := exec.Command("launchctl", "getenv", "SSH_AUTH_SOCK").Output()
 		if err == nil && len(out) > 0 {
-			sock = strings.TrimSpace(string(out))
-			env = append(env, "SSH_AUTH_SOCK="+sock)
+			env = append(env, "SSH_AUTH_SOCK="+strings.TrimSpace(string(out)))
 		}
 	}
 

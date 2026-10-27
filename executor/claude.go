@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -193,8 +194,11 @@ const tmuxSocket = "drupal-updater"
 
 func tmux(args ...string) (string, error) {
 	cmd := exec.Command(tmuxPath(), append([]string{"-L", tmuxSocket}, args...)...)
-	// TERM/TERMINFO_DIRS: a GUI app has no TERM, and a bundled ncurses can't see Homebrew's terminfo
-	cmd.Env = append(EnrichedEnv(), "TERM=xterm-256color", "TERMINFO_DIRS=/usr/share/terminfo")
+	// A GUI app has no TERM. The macOS bundled ncurses can't see Homebrew's terminfo; Linux keeps its own (Debian: /lib/terminfo).
+	cmd.Env = append(EnrichedEnv(), "TERM=xterm-256color")
+	if runtime.GOOS == "darwin" {
+		cmd.Env = append(cmd.Env, "TERMINFO_DIRS=/usr/share/terminfo")
+	}
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
