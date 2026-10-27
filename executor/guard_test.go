@@ -139,3 +139,36 @@ func TestGuardGitConfigAndCwd(t *testing.T) {
 		t.Fatal("cwd outside project allowed")
 	}
 }
+
+func TestUpdateGitConfigAcceptsOnlyBranchChanges(t *testing.T) {
+	gitBin, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not installed")
+	}
+	proj, runDir := t.TempDir(), t.TempDir()
+	git := func(args ...string) {
+		cmd := exec.Command(gitBin, args...)
+		cmd.Dir = proj
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	git("init", "-q")
+	if err := saveGitConfig(gitBin, proj, runDir); err != nil {
+		t.Fatal(err)
+	}
+	git("config", "branch.main.remote", "origin")
+	if err := updateGitConfig(gitBin, proj, runDir); err != nil {
+		t.Fatalf("branch.* change refused: %v", err)
+	}
+	if err := checkGitConfig(gitBin, proj, runDir); err != nil {
+		t.Fatalf("snapshot not updated: %v", err)
+	}
+	git("config", "core.sshCommand", "touch /tmp/pwned")
+	if updateGitConfig(gitBin, proj, runDir) == nil {
+		t.Fatal("core.sshCommand change accepted")
+	}
+	if checkGitConfig(gitBin, proj, runDir) == nil {
+		t.Fatal("snapshot updated despite unexpected change")
+	}
+}

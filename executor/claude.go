@@ -188,6 +188,15 @@ func safeName(s string) string {
 	}, s)
 }
 
+// runDirFor is where a project's Claude run keeps its prompt, scripts, shims and guard state.
+func runDirFor(project string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config", "drupal-updater", "runs", safeName(project)), nil // next to config.yaml and updater.log
+}
+
 // tmuxPath prefers the copy bundled inside the .app, then a tmux on the enriched PATH.
 func tmuxPath() string {
 	if exe, err := os.Executable(); err == nil {
@@ -267,13 +276,11 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 		send("failed", "Claude session", msg)
 	}
 
-	home, err := os.UserHomeDir()
+	runDir, err := runDirFor(name)
 	if err != nil {
-		fail("no home dir: " + err.Error())
+		fail(err.Error())
 		return
 	}
-	cfgDir := filepath.Join(home, ".config") // same place as config.yaml and updater.log
-	runDir := filepath.Join(cfgDir, "drupal-updater", "runs", safeName(name))
 	outDir := filepath.Join(runDir, "out") // the only run folder Claude may write to; run.sh/import-db.sh stay out of reach
 	resultFile := filepath.Join(outDir, "result.json")
 	turnFile := filepath.Join(runDir, "turn-done")
@@ -399,6 +406,10 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 				return
 			}
 			if tempBranch != "" {
+				if err := checkGitConfig(realGit, path, runDir); err != nil {
+					fail("Claude reported success, but " + err.Error())
+					return
+				}
 				if cur, _ := git(path, "branch", "--show-current"); strings.TrimSpace(cur) != tempBranch {
 					fail(fmt.Sprintf("Claude reported success but repo is on %q, expected %q", strings.TrimSpace(cur), tempBranch))
 					return

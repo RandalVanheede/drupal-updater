@@ -64,9 +64,9 @@ func Guard(args []string) int {
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	runErr := cmd.Run()
 	if tool == "git" {
-		// git itself may legitimately change config (--set-upstream-to) and remote refs (fetch/pull).
-		// shortcut: a container write landing while this git runs is accepted too; tiny window, use inotify if it matters.
-		if err := saveGitConfig(git, root, runDir); err != nil {
+		// git itself may legitimately change branch.* config (--set-upstream-to, -m, -D) and remote refs (fetch/pull).
+		// shortcut: a branch.* or ref write from a container landing while this git runs is accepted too; use inotify if it matters.
+		if err := updateGitConfig(git, root, runDir); err != nil {
 			fmt.Fprintf(os.Stderr, "drupal-updater guard: %v\n", err)
 		}
 		if sub == "fetch" || sub == "pull" {
@@ -124,6 +124,28 @@ func checkGitConfig(git, root, runDir string) error {
 		return errors.New(".git/config was changed outside git (possibly by code in a container); a human must review it")
 	}
 	return nil
+}
+
+// updateGitConfig re-snapshots the config after git ran, accepting only branch.* changes. Anything
+// else keeps the old snapshot, so every later git/ddev call is refused.
+func updateGitConfig(git, root, runDir string) error {
+	current, err := localGitConfig(git, root)
+	if err != nil {
+		return err
+	}
+	saved, err := os.ReadFile(filepath.Join(runDir, gitConfigFile))
+	if err != nil {
+		return err
+	}
+	before, after := strings.Split(string(saved), "\n"), strings.Split(current, "\n")
+	for _, pair := range [][2][]string{{before, after}, {after, before}} {
+		for _, line := range pair[0] {
+			if line != "" && !slices.Contains(pair[1], line) && !strings.HasPrefix(line, "branch.") {
+				return fmt.Errorf(".git/config changed unexpectedly (%s); further git/ddev calls are refused", line)
+			}
+		}
+	}
+	return writeReadOnly(filepath.Join(runDir, gitConfigFile), []byte(current))
 }
 
 func saveGitConfig(git, root, runDir string) error {
@@ -380,4 +402,25 @@ func writeGuardState(git, root, runDir string) error {
 		logging.Error("could not record remote .ddev states: %v", err) // not a git repo yet: run-start state only
 	}
 	return saveGitConfig(git, root, runDir)
+}
+
+// withRunGitConfig runs one of the app's own git operations on a project only while its .git/config
+// still matches the snapshot the guard kept during the last Claude run (container code may have
+// changed it since), then takes over the expected branch.* changes.
+func withRunGitConfig(projectPath string, fn func() error) error {
+	runDir, err := runDirFor(filepath.Base(projectPath))
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(filepath.Join(runDir, gitConfigFile)); err != nil {
+		return fn() // never run in claude mode
+	}
+	git := lookEnriched("git")
+	if err := checkGitConfig(git, projectPath, runDir); err != nil {
+		return fmt.Errorf("%w; review it, then start a new run (or delete %s)", err, filepath.Join(runDir, gitConfigFile))
+	}
+	if err := fn(); err != nil {
+		return err
+	}
+	return updateGitConfig(git, projectPath, runDir)
 }

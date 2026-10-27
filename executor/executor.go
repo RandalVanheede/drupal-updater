@@ -103,7 +103,7 @@ func TempBranch(project string) string { return "drupal-updater/temp-" + BranchS
 // git runs git directly (no shell) so branch names can't inject commands.
 func git(dir string, args ...string) (string, error) {
 	// hooks off: .git is writable from the ddev containers, so a planted hook would run on the host
-	cmd := exec.Command("git", append([]string{"-c", "core.hooksPath=/dev/null"}, args...)...)
+	cmd := exec.Command("git", append([]string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"}, args...)...)
 	cmd.Dir = dir
 	cmd.Env = EnrichedEnv()
 	out, err := cmd.CombinedOutput()
@@ -139,8 +139,7 @@ func ResolveStartBranch(projectPath, configured string) string {
 
 // PruneStashes drops auto-heal stashes older than stashMaxAge.
 func PruneStashes(projectPath string) {
-	ctx := context.Background()
-	out, err := shellCmd(ctx, "git stash list --format='%gd|%ct|%s'", projectPath)
+	out, err := git(projectPath, "stash", "list", "--format=%gd|%ct|%s")
 	if err != nil {
 		return
 	}
@@ -151,7 +150,7 @@ func PruneStashes(projectPath string) {
 			continue
 		}
 		if ts, err := strconv.ParseInt(parts[1], 10, 64); err == nil && time.Since(time.Unix(ts, 0)) > stashMaxAge {
-			shellCmd(ctx, "git stash drop --quiet "+parts[0], projectPath)
+			git(projectPath, "stash", "drop", "--quiet", parts[0])
 		}
 	}
 }
@@ -167,13 +166,12 @@ func RenameBranch(projectPath, oldBranch, newBranch string) error {
 	if err := check.Run(); err != nil {
 		return fmt.Errorf("invalid branch name %q", newBranch)
 	}
-	cmd := exec.Command("git", "branch", "-m", "--", oldBranch, newBranch)
-	cmd.Dir = projectPath
-	cmd.Env = EnrichedEnv()
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git branch -m failed: %v\n%s", err, out)
-	}
-	return nil
+	return withRunGitConfig(projectPath, func() error {
+		if out, err := git(projectPath, "branch", "-m", "--", oldBranch, newBranch); err != nil {
+			return fmt.Errorf("git branch -m failed: %v\n%s", err, out)
+		}
+		return nil
+	})
 }
 
 // Cleanup returns the project to startBranch (stashing a dirty tree if needed)
@@ -183,16 +181,18 @@ func Cleanup(projectPath, startBranch, tempBranch string) error {
 	if !safeBranch.MatchString(startBranch) || (tempBranch != "" && !safeBranch.MatchString(tempBranch)) {
 		return fmt.Errorf("refusing unsafe branch name %q / %q", startBranch, tempBranch)
 	}
-	if _, err := git(projectPath, "checkout", startBranch, "--"); err != nil {
-		git(projectPath, "stash", "push", "-u", "-m", stashMsg)
-		if out, err := git(projectPath, "checkout", startBranch, "--"); err != nil {
-			return fmt.Errorf("git checkout %s failed: %v\n%s", startBranch, err, out)
+	return withRunGitConfig(projectPath, func() error {
+		if _, err := git(projectPath, "checkout", startBranch, "--"); err != nil {
+			git(projectPath, "stash", "push", "-u", "-m", stashMsg)
+			if out, err := git(projectPath, "checkout", startBranch, "--"); err != nil {
+				return fmt.Errorf("git checkout %s failed: %v\n%s", startBranch, err, out)
+			}
 		}
-	}
-	if tempBranch != "" {
-		git(projectPath, "branch", "-D", "--", tempBranch) // best-effort: may not exist
-	}
-	return nil
+		if tempBranch != "" {
+			git(projectPath, "branch", "-D", "--", tempBranch) // best-effort: may not exist
+		}
+		return nil
+	})
 }
 
 // BuildCommands expands every "git pull*" command into: checkout start branch,
