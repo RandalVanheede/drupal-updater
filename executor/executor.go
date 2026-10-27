@@ -255,6 +255,7 @@ type StatusUpdate struct {
 	Status      string // running, success, failed, cancelled
 	Command     string
 	Output      string
+	Screen      string // latest snapshot of the Claude session's terminal; replaces the previous one, not part of the log
 }
 
 // Run executes commands sequentially for a project, sending updates to the channel.

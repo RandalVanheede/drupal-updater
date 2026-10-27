@@ -197,6 +197,7 @@ func (a *App) StartUpdate(req UpdateRequest) {
 				"status":  update.Status,
 				"command": update.Command,
 				"output":  update.Output,
+				"screen":  update.Screen,
 			})
 		}
 	}()

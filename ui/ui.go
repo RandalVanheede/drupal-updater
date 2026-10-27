@@ -30,6 +30,7 @@ type model struct {
 	selected map[string]bool
 	status   map[string]string
 	logs     map[string]string
+	screens  map[string]string // live Claude terminal per project
 
 	cursor    int
 	state     int
@@ -173,6 +174,7 @@ func New(cfg *config.Config, projects []discovery.Project) *model {
 		selected:       make(map[string]bool),
 		status:         make(map[string]string),
 		logs:           make(map[string]string),
+		screens:        make(map[string]string),
 		state:          StateList,
 		branchInput:    bi,
 		msgChan:        make(chan executor.StatusUpdate, 100),
@@ -364,7 +366,7 @@ func (m *model) updateRunning(msg tea.Msg) (*model, []tea.Cmd) {
 				m.prevState = StateRunning
 				m.state = StateDetail
 				m.detailVP = viewport.New(m.width-4, m.height-6)
-				m.detailVP.SetContent(m.logs[m.detailProject])
+				m.detailVP.SetContent(m.detailText(m.detailProject))
 				m.detailVP.GotoBottom()
 				logging.Info("Entering detail view for project: %s", m.detailProject)
 			}
@@ -383,15 +385,7 @@ func (m *model) updateRunning(msg tea.Msg) (*model, []tea.Cmd) {
 			}
 		}
 	case executor.StatusUpdate:
-		m.status[msg.ProjectName] = msg.Status
-		if msg.Output != "" {
-			m.logs[msg.ProjectName] += msg.Command + "\n" + msg.Output + "\n"
-		} else {
-			m.logs[msg.ProjectName] += "$ " + msg.Command + "\n"
-		}
-		if msg.Status == "success" || msg.Status == "failed" || msg.Status == "cancelled" {
-			m.doneJobs++
-		}
+		m.applyUpdate(msg)
 		if m.doneJobs < m.totalJobs {
 			cmds = append(cmds, waitForActivity(m.msgChan))
 		} else if m.doneJobs >= m.totalJobs && m.totalJobs > 0 {
@@ -403,6 +397,31 @@ func (m *model) updateRunning(msg tea.Msg) (*model, []tea.Cmd) {
 		}
 	}
 	return m, cmds
+}
+
+// applyUpdate records a status update: a screen snapshot replaces the live view, anything else is logged.
+func (m *model) applyUpdate(msg executor.StatusUpdate) {
+	if msg.Screen != "" {
+		m.screens[msg.ProjectName] = msg.Screen
+		return
+	}
+	m.status[msg.ProjectName] = msg.Status
+	if msg.Output != "" {
+		m.logs[msg.ProjectName] += msg.Command + "\n" + msg.Output + "\n"
+	} else {
+		m.logs[msg.ProjectName] += "$ " + msg.Command + "\n"
+	}
+	if msg.Status == "success" || msg.Status == "failed" || msg.Status == "cancelled" {
+		m.doneJobs++
+	}
+}
+
+// detailText is a project's log followed by the latest Claude screen, if any.
+func (m *model) detailText(name string) string {
+	if m.screens[name] == "" {
+		return m.logs[name]
+	}
+	return m.logs[name] + "\n── Claude session (live) ──\n" + strings.TrimRight(m.screens[name], "\n")
 }
 
 func (m *model) updateDetail(msg tea.Msg) (*model, []tea.Cmd) {
@@ -418,18 +437,13 @@ func (m *model) updateDetail(msg tea.Msg) (*model, []tea.Cmd) {
 			return m, nil
 		}
 	case executor.StatusUpdate:
-		m.status[msg.ProjectName] = msg.Status
-		if msg.Output != "" {
-			m.logs[msg.ProjectName] += msg.Command + "\n" + msg.Output + "\n"
-		} else {
-			m.logs[msg.ProjectName] += "$ " + msg.Command + "\n"
-		}
-		if msg.Status == "success" || msg.Status == "failed" || msg.Status == "cancelled" {
-			m.doneJobs++
-		}
+		m.applyUpdate(msg)
 		if msg.ProjectName == m.detailProject {
-			m.detailVP.SetContent(m.logs[m.detailProject])
-			m.detailVP.GotoBottom()
+			follow := m.detailVP.AtBottom() // don't yank the view away while the user scrolls back
+			m.detailVP.SetContent(m.detailText(m.detailProject))
+			if follow {
+				m.detailVP.GotoBottom()
+			}
 		}
 		if m.doneJobs < m.totalJobs {
 			return m, []tea.Cmd{waitForActivity(m.msgChan)}
@@ -500,7 +514,7 @@ func (m *model) updateConfirmBranch(msg tea.Msg) (*model, []tea.Cmd, tea.Cmd) {
 					m.prevState = StateConfirmBranch
 					m.state = StateDetail
 					m.detailVP = viewport.New(m.width-4, m.height-6)
-					m.detailVP.SetContent(m.logs[pName])
+					m.detailVP.SetContent(m.detailText(pName))
 					m.detailVP.GotoBottom()
 					return m, cmds, nil
 				}
@@ -549,6 +563,7 @@ func (m *model) retryFailed() tea.Cmd {
 	for _, pName := range retryProjects {
 		m.status[pName] = "idle"
 		m.logs[pName] = ""
+		delete(m.screens, pName)
 
 		p := m.projectByName(pName)
 		if p == nil {

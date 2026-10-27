@@ -315,7 +315,7 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 		}
 	}
 
-	if o, err := tmux("new-session", "-d", "-s", session, "-c", path, loginShell(), "-l", filepath.Join(runDir, "run.sh")); err != nil {
+	if o, err := tmux("new-session", "-d", "-x", "200", "-y", "50", "-s", session, "-c", path, loginShell(), "-l", filepath.Join(runDir, "run.sh")); err != nil {
 		fail("tmux failed: " + err.Error() + "\n" + o)
 		return
 	}
@@ -329,6 +329,7 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 	defer tick.Stop()
 	var notifiedTurn time.Time
 	notifiedPrompt := false
+	var lastPane string
 	for {
 		select {
 		case <-ctx.Done():
@@ -366,6 +367,13 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 			return
 		}
 		pane, _ := tmux("capture-pane", "-p", "-t", "="+session+":")
+		if pane != lastPane {
+			lastPane = pane
+			select { // live view only: drop a frame rather than stall the run when nobody reads
+			case out <- StatusUpdate{ProjectName: name, Status: "running", Screen: pane}:
+			default:
+			}
+		}
 		if strings.Contains(pane, "trust this folder") {
 			fail(fmt.Sprintf("Claude does not trust %s yet. Run `claude` once in that folder, accept the prompt, then retry.", path))
 			return

@@ -11,6 +11,7 @@
 
   let statuses = $state({});
   let logs = $state({});
+  let screens = $state({}); // live Claude terminal per project
   let notStarted = {}; // projects that failed before running (discovery), so confirm must not clean up their branch
   let allDone = $state(false);
   let detailProject = $state('');
@@ -32,6 +33,7 @@
     EventsOn('status-update', (update) => {
       const name = update.project || update.Project || update.ProjectName;
       if (!name) return;
+      if (update.screen) { screens[name] = update.screen; return; } // live view, not a log line
       statuses[name] = update.status || update.Status;
       const cmd = update.command || update.Command;
       if (cmd === 'discover') notStarted[name] = true; // never ran: no temp branch of this run to clean up
@@ -115,6 +117,7 @@
     selectedNames.forEach(name => {
       statuses[name] = 'idle';
       logs[name] = '';
+      delete screens[name];
     });
 
     view = 'running';
@@ -199,6 +202,7 @@
       statuses[name] = 'idle';
       delete notStarted[name];
       logs[name] = '';
+      delete screens[name];
     });
 
     allDone = false;
@@ -431,6 +435,10 @@
         <span class="badge badge-{statuses[detailProject]}">{statuses[detailProject]?.toUpperCase()}</span>
       </div>
       <pre class="log-output">{logs[detailProject] || 'Waiting...'}</pre>
+      {#if screens[detailProject]}
+        <h3 class="live-title">Claude session {statuses[detailProject] === 'running' ? '(live)' : '(last screen)'}</h3>
+        <pre class="log-output live-output">{screens[detailProject]}</pre>
+      {/if}
     </section>
 
   {:else if view === 'confirm'}
@@ -840,6 +848,8 @@
     border-color: #c084fc;
   }
 
+  .live-title { margin: 12px 0 6px; font-size: 13px; color: #8a8ab0; }
+  .live-output { font-size: 11px; white-space: pre; overflow-x: auto; }
   .log-output {
     flex: 1;
     overflow-y: auto;
