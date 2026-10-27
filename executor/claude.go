@@ -85,9 +85,9 @@ var claudeDenied = []string{
 	"Bash(git * --exec-path*)", "Bash(git * --git-dir*)", "Bash(git * --work-tree*)", "Bash(git * -C *)",
 	"Bash(git --bare*)", "Bash(git * --bare*)", "Bash(git apply*)", "Bash(git am*)", // can write files outside Edit rules (.ddev/)
 	"Bash(ddev add-on*)", "Bash(ddev get*)", "Bash(ddev dotenv*)", // install/modify .ddev, incl. host commands
-	"Edit(.ddev/**)", // host commands (.ddev/commands/host) and exec-host hooks would run on the host via "ddev *"
+	"Edit(.ddev/**)", "Edit(**/.ddev/**)", // host commands (.ddev/commands/host) and exec-host hooks would run on the host via "ddev *"
 	"Bash(ddev composer exec*)", "Bash(ddev composer run*)", "Bash(ddev mysql*)", "Bash(ddev launch*)",
-	"Edit(.git/**)", // Edit rules cover Write too
+	"Edit(.git/**)", "Edit(**/.git/**)", // Edit rules cover Write too; ** form also matches via a symlinked path
 	"Bash(drush php*)", "Bash(drush ev*)", "Bash(drush sql*)", "Bash(ddev drush php*)", "Bash(ddev drush ev*)", "Bash(ddev drush sql*)",
 }
 
