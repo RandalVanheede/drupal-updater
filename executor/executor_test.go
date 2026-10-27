@@ -122,3 +122,16 @@ func TestCleanupAndResolveRejectUnsafeNames(t *testing.T) {
 		t.Error("injection ran")
 	}
 }
+
+func TestTempBranch(t *testing.T) {
+	for in, want := range map[string]string{
+		"My Site":    "drupal-updater/temp-my-site",
+		"a..b__c":    "drupal-updater/temp-a-b-c",
+		"-x-":        "drupal-updater/temp-x",
+		"site-2.org": "drupal-updater/temp-site-2-org",
+	} {
+		if got := TempBranch(in); got != want {
+			t.Errorf("TempBranch(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

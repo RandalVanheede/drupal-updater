@@ -31,18 +31,6 @@ func configPath() string {
 	return filepath.Join(home, ".config", "drupal-updater", "config.yaml")
 }
 
-// sanitize converts a project name to a branch-safe slug.
-func sanitize(name string) string {
-	s := strings.ToLower(name)
-	s = strings.Map(func(r rune) rune {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
-			return r
-		}
-		return '-'
-	}, s)
-	return strings.Trim(s, "-")
-}
-
 func outputJSON(v interface{}) {
 	data, _ := json.Marshal(v)
 	fmt.Println(string(data))
@@ -51,11 +39,6 @@ func outputJSON(v interface{}) {
 func fatal(msg string) {
 	outputJSON(map[string]interface{}{"ok": false, "error": msg})
 	os.Exit(1)
-}
-
-// tempBranchName returns the deterministic temp branch name for a project.
-func tempBranchName(projectName string) string {
-	return fmt.Sprintf("drupal-updater/temp-%s", sanitize(projectName))
 }
 
 // loadConfigOrFatal loads config, calling fatal on error.
@@ -254,7 +237,7 @@ func cmdStartUpdate(args []string) {
 		pCfg := cfg.Projects[p.Name]
 		pCfg.MergeWithDefaults(cfg)
 
-		tempBranch := tempBranchName(p.Name)
+		tempBranch := executor.TempBranch(p.Name)
 		commands := executor.BuildCommands(pCfg.Commands, pCfg.GitStartBranch, tempBranch)
 
 		logging.Info("[api] Queuing project %s, temp branch: %s", p.Name, tempBranch)
@@ -333,7 +316,7 @@ func cmdRenameBranch(args []string) {
 		fatal(fmt.Sprintf("project not found: %s", projectName))
 	}
 
-	tempBranch := tempBranchName(projectName)
+	tempBranch := executor.TempBranch(projectName)
 	logging.Info("[api] rename-branch: %s -> %s in %s", tempBranch, finalBranch, p.Path)
 
 	if err := executor.RenameBranch(p.Path, tempBranch, finalBranch); err != nil {
@@ -364,7 +347,7 @@ func cmdCleanupBranch(args []string) {
 	pCfg := cfg.Projects[projectName]
 	pCfg.MergeWithDefaults(cfg)
 
-	tempBranch := tempBranchName(projectName)
+	tempBranch := executor.TempBranch(projectName)
 
 	logging.Info("[api] cleanup-branch: %s -> %s in %s", tempBranch, pCfg.GitStartBranch, p.Path)
 	if err := executor.Cleanup(p.Path, pCfg.GitStartBranch, tempBranch); err != nil {

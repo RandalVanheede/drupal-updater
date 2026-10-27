@@ -3,7 +3,6 @@ package ui
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strings"
 
 	"drupal-updater/config"
@@ -160,15 +159,6 @@ var (
 			Foreground(dim).
 			Italic(true)
 )
-
-// sanitizeBranchName lowercases and replaces non-alphanumeric (except -) with dashes.
-func sanitizeBranchName(s string) string {
-	s = strings.ToLower(s)
-	re := regexp.MustCompile(`[^a-z0-9-]+`)
-	s = re.ReplaceAllString(s, "-")
-	s = strings.Trim(s, "-")
-	return s
-}
 
 func New(cfg *config.Config, projects []discovery.Project) *model {
 	bi := textinput.New()
@@ -720,8 +710,8 @@ func (m *model) startExecution() {
 		pCfg.MergeWithDefaults(m.cfg)
 
 		// Build temp branch name
-		sanitized := sanitizeBranchName(p.Name)
-		tempBranch := fmt.Sprintf("drupal-updater/temp-%s", sanitized)
+		sanitized := executor.BranchSlug(p.Name)
+		tempBranch := executor.TempBranch(p.Name)
 		m.tempBranches[p.Name] = tempBranch
 
 		// Pre-fill final branch name from pattern (replace * with sanitized project name)

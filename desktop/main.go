@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 
 	"drupal-updater/api"
@@ -99,17 +98,6 @@ type UpdateRequest struct {
 	Projects []string `json:"projects"`
 }
 
-func sanitize(name string) string {
-	s := strings.ToLower(name)
-	s = strings.Map(func(r rune) rune {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
-			return r
-		}
-		return '-'
-	}, s)
-	return strings.Trim(s, "-")
-}
-
 func (a *App) StartUpdate(req UpdateRequest) {
 	a.mu.Lock()
 	if a.sem == nil {
@@ -161,7 +149,7 @@ func (a *App) StartUpdate(req UpdateRequest) {
 		pCfg := a.cfg.Projects[projectName]
 		pCfg.MergeWithDefaults(a.cfg)
 
-		tempBranch := "drupal-updater/temp-" + sanitize(projectName)
+		tempBranch := executor.TempBranch(projectName)
 		startBranch := pCfg.GitStartBranch
 
 		commands := executor.BuildCommands(pCfg.Commands, startBranch, tempBranch)
@@ -250,7 +238,7 @@ func (a *App) RenameBranch(projectName, finalBranch string) error {
 		return fmt.Errorf("project %s not found", projectName)
 	}
 
-	tempBranch := "drupal-updater/temp-" + sanitize(projectName)
+	tempBranch := executor.TempBranch(projectName)
 	if err := executor.RenameBranch(projectPath, tempBranch, finalBranch); err != nil {
 		return err
 	}
@@ -278,7 +266,7 @@ func (a *App) CleanupBranch(projectName string) error {
 	pCfg := a.cfg.Projects[projectName]
 	pCfg.MergeWithDefaults(a.cfg)
 
-	tempBranch := "drupal-updater/temp-" + sanitize(projectName)
+	tempBranch := executor.TempBranch(projectName)
 	if err := executor.Cleanup(projectPath, pCfg.GitStartBranch, tempBranch); err != nil {
 		return err
 	}

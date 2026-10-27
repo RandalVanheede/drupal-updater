@@ -92,6 +92,16 @@ func Configure(cfg *config.Config) {
 
 var safeBranch = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`)
 
+var nonSlug = regexp.MustCompile(`[^a-z0-9-]+`)
+
+// BranchSlug lowercases s and turns every run of other characters into one dash.
+func BranchSlug(s string) string {
+	return strings.Trim(nonSlug.ReplaceAllString(strings.ToLower(s), "-"), "-")
+}
+
+// TempBranch is the branch a project's update runs on before it is renamed or cleaned up.
+func TempBranch(project string) string { return "drupal-updater/temp-" + BranchSlug(project) }
+
 // git runs git directly (no shell) so branch names can't inject commands.
 func git(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
