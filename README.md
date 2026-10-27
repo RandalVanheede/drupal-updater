@@ -28,6 +28,10 @@ Wails can't cross-compile between operating systems or CPUs (webkit needs cgo), 
 
 ``
 
+## Releases
+
+Semantic versioning; changes go in `CHANGELOG.md` (Keep a Changelog). Work happens on release branches named `<major>.<minor>.x` (currently `1.0.x`). To release: move the `[Unreleased]` entries into a new version section, commit, then `git tag vX.Y.Z && git push origin 1.0.x vX.Y.Z`. CI (`.github/workflows/build.yml`) tests every push and, for a `v*` tag, builds the macOS DMG (arm64) plus macOS TUI binaries and the Linux tarballs (amd64, arm64), and publishes them as a GitHub release with that version's changelog section as notes.
+
 ## Configuration
 
 Config file location: `~/.config/drupal-updater/config.yaml`

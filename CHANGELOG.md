@@ -1,0 +1,25 @@
+# Changelog
+
+All notable changes to this project are documented here.
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html). Release branches are named `<major>.<minor>.x`.
+
+## [Unreleased]
+
+## [1.0.0] - 2026-10-27
+
+First versioned release.
+
+### Added
+- Batch updates of local Drupal/DDEV projects from a terminal UI (`drupal-updater`) and a desktop app (Wails, macOS DMG and Linux tarballs).
+- Claude mode (default): each project is updated by an autonomous Claude Code session in a private tmux server, on a temp branch you rename or clean up afterwards.
+- Updates Drupal core, Symfony and Twig within their constraints, plus every security advisory from `composer audit` that needs no major upgrade (core may move to a newer minor, never a new major).
+- Smoke tests before and after the update (bootstrap, common anonymous and admin pages, error logs, pending config); regressions are fixed, rolled back, or fail the run. Extra paths per project via `smoke_paths`, extra flows via the project's `AGENTS.md`.
+- Live view of each Claude session in the TUI and desktop app, without attaching to tmux.
+- Hard limits for the agent via git/ddev guard shims: no commits, merges or pushes, nothing that destroys local work or the database.
+- Update sessions run as vanilla Claude Code (no user plugins, hooks, skills or CLAUDE.md), about 70% fewer input tokens per turn.
+- Classic mode: the configured shell commands with retries and auto-healing, no Claude.
+- Build scripts for macOS (`scripts/build-dmg.sh`) and Linux amd64/arm64 (`scripts/build-linux.sh`, `scripts/build-linux-docker.sh`), and a CI pipeline that builds them for each release tag.
+
+[Unreleased]: https://github.com/RandalVanheede/drupal-updater/compare/v1.0.0...1.0.x
+[1.0.0]: https://github.com/RandalVanheede/drupal-updater/releases/tag/v1.0.0
