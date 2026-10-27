@@ -123,6 +123,16 @@ projects:
     smoke_paths: [/nl/contact, "admin:/admin/structure/webform"]   # admin: = checked while logged in
 ```
 
+Flows that need more than loading a page belong in the project's own repo, in `AGENTS.md` (the open standard for coding-agent instructions; `CLAUDE.md` is read when there is no `AGENTS.md`). The agent reads it before starting and runs its testing section at both smoke-test steps, e.g.:
+
+```markdown
+## Smoke tests
+- Submit the contact form at /nl/contact; the confirmation message appears and a mail shows up in Mailpit.
+- Log in as an editor, create a news item with an image, check it on /nl/nieuws.
+```
+
+Your global `~/.claude/CLAUDE.md` is not loaded in update sessions (`CLAUDE_CODE_DISABLE_CLAUDE_MDS=1`).
+
 The agent works autonomously with every tool. Hard limits, enforced twice (permission deny rules, and read-only `git`/`ddev` shims in `runs/<project>/bin` that run the app's hidden `guard` subcommand, `executor/guard.go`, which also catches aliases, global options and grouped flags):
 - **No commits, merges or pushes**: `git commit/merge/push/cherry-pick/revert/am`, and `git pull` without `--rebase`/`--ff-only`.
 - **No destroying local work or data**: `git reset --hard`, `git clean`, `git stash drop/clear`, `ddev delete/clean`, `--reset-database`, `-R/--remove-data`, `snapshot -C/--cleanup`.

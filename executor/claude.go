@@ -31,6 +31,8 @@ Branches:
 - Start branch: {{start_branch}}. If it does not exist locally, use the repository's real default branch (origin/HEAD, else main/master).
 - Temp branch: {{temp_branch}}. All work happens on this branch.
 
+Project notes: if the repository has an AGENTS.md (or else a CLAUDE.md), read it before starting and follow it where it doesn't conflict with this task. Flows listed in its testing / smoke test section are extra checks for steps 6 and 11.
+
 Steps, in order:
 1. git checkout {{start_branch}}, then git pull --rebase --autostash
 2. git checkout -B {{temp_branch}} (this also resets the branch if it already exists)
@@ -61,6 +63,7 @@ Smoke tests (steps 6 and 11). Run the same checks both times and keep the baseli
 - No new Error-level log entries since the baseline (ddev drush ws --severity=Error).
 - After step 10: ddev drush cst shows nothing pending.
 - Extra paths for this project (prefix admin: means check while logged in): {{smoke_paths}}
+- The flows from the project's AGENTS.md / CLAUDE.md testing section, if any, carried out with curl and drush.
 A regression is a check that passed at the baseline and fails after the update. A check that already failed at the baseline is pre-existing: report it, don't try to fix it.
 For each regression: find the cause (page output, logs) and fix it when the update caused it (cache, config import, update hook, patch, constraint). If you can't, roll back only the package that causes it, as with a skipped security fix, and run the checks again. If a regression remains, finish with status failed and name the broken check.
 
@@ -297,8 +300,9 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 		"hooks": []any{map[string]any{"type": "command", "command": "touch " + sq(turnFile)}},
 	}}}}
 	settingsJSON, _ := json.Marshal(settings)
+	// CLAUDE_CODE_DISABLE_CLAUDE_MDS: the user's global CLAUDE.md is their own setup, noise here; the prompt reads the project's AGENTS.md itself.
 	// --setting-sources user: the repo is auto-trusted, so never load hooks/permissions from its .claude/ settings.
-	script := fmt.Sprintf("#!/bin/sh\ncd %s || exit 1\nPATH=%s:\"$PATH\"; export PATH # git/ddev resolve to the guard shims\nclaude --model %s --strict-mcp-config --setting-sources user --permission-mode %s --settings %s --add-dir %s --allowedTools=%s --disallowedTools=%s \"$(cat %s)\"\necho $? > %s\n",
+	script := fmt.Sprintf("#!/bin/sh\ncd %s || exit 1\nPATH=%s:\"$PATH\"; export PATH # git/ddev resolve to the guard shims\nCLAUDE_CODE_DISABLE_CLAUDE_MDS=1 claude --model %s --strict-mcp-config --setting-sources user --permission-mode %s --settings %s --add-dir %s --allowedTools=%s --disallowedTools=%s \"$(cat %s)\"\necho $? > %s\n",
 		sq(path), sq(filepath.Join(runDir, "bin")), sq(claudeCfg.model), sq(claudeCfg.permission), sq(filepath.Join(runDir, "settings.json")), sq(outDir),
 		sq(strings.Join(claudeCfg.allowed, ",")), sq(strings.Join(claudeDenied, ",")), sq(filepath.Join(runDir, "prompt.md")), sq(exitFile))
 	exe, err := os.Executable()
