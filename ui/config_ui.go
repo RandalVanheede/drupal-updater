@@ -392,6 +392,17 @@ func (cm *configModel) saveProjectField() {
 	cm.cfg.Projects[cm.editingProject] = pc
 }
 
+// writeList renders items with the cursor marker and highlight on the item at cursor.
+func writeList(s *strings.Builder, items []string, cursor int) {
+	for i, item := range items {
+		marker, color := "  ", dimWhite
+		if i == cursor {
+			marker, color = cursorStyle.Render("▸ "), cyan
+		}
+		s.WriteString(fmt.Sprintf("  %s%s\n", marker, lipgloss.NewStyle().Foreground(color).Render(item)))
+	}
+}
+
 func (cm *configModel) View() string {
 	var s strings.Builder
 
@@ -408,23 +419,45 @@ func (cm *configModel) View() string {
 			fmt.Sprintf("Manage projects (%d configured)", len(cm.cfg.Projects)),
 			"Save & exit",
 		}
-		for i, item := range items {
-			cursor := "  "
-			if cm.cursor == i {
-				cursor = cursorStyle.Render("▸ ")
-			}
-			label := lipgloss.NewStyle().Foreground(dimWhite).Render(item)
-			if cm.cursor == i {
-				label = lipgloss.NewStyle().Foreground(cyan).Render(item)
-			}
-			s.WriteString(fmt.Sprintf("  %s%s\n", cursor, label))
-		}
+		writeList(&s, items, cm.cursor)
 		s.WriteString("\n  " + helpStyle.Render("Claude mode/model/prompt/tools: use the desktop app Settings or edit ~/.config/drupal-updater/config.yaml"))
 		if cm.message != "" {
 			s.WriteString("\n  " + progressStyle.Render(cm.message))
 		}
 		s.WriteString("\n\n")
 		s.WriteString("  " + helpKey("enter", "edit") + "  " + helpKey("esc/q", "quit without saving"))
+		s.WriteString("\n")
+
+	case ConfigProjectList:
+		s.WriteString(subtitleStyle.Render("  Projects:") + "\n\n")
+		writeList(&s, append(append([]string(nil), cm.projectNames...), "+ Add project"), cm.projectCursor)
+		if cm.message != "" {
+			s.WriteString("\n  " + progressStyle.Render(cm.message))
+		}
+		s.WriteString("\n\n  " + helpKey("enter", "edit") + "  " + helpKey("d", "delete") + "  " + helpKey("esc", "back"))
+		s.WriteString("\n")
+
+	case ConfigProjectEdit:
+		pc := cm.cfg.Projects[cm.editingProject]
+		pc.MergeWithDefaults(cm.cfg) // show what a run would use
+		value := func(v string) string { return lipgloss.NewStyle().Foreground(dimWhite).Render(v) }
+		orNone := func(l []string) string {
+			if len(l) == 0 {
+				return "(none)"
+			}
+			return strings.Join(l, ", ")
+		}
+		// order must match the fieldCursor cases in updateProjectEdit
+		items := []string{
+			"Start branch: " + value(pc.GitStartBranch),
+			"New branch pattern: " + value(pc.GitNewBranchPattern),
+			"Ignored packages: " + value(orNone(pc.IgnoredPackages)),
+			"Smoke-test paths: " + value(orNone(pc.SmokePaths)),
+			"Commands (classic mode): " + value(fmt.Sprintf("(%d commands)", len(pc.Commands))),
+		}
+		s.WriteString(subtitleStyle.Render("  Project: "+cm.editingProject) + "\n\n")
+		writeList(&s, items, cm.fieldCursor)
+		s.WriteString("\n  " + helpKey("enter", "edit") + "  " + helpKey("esc", "back"))
 		s.WriteString("\n")
 
 	case ConfigEditBaseFolder:
