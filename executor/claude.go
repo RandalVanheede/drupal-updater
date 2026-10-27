@@ -300,9 +300,10 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 		"hooks": []any{map[string]any{"type": "command", "command": "touch " + sq(turnFile)}},
 	}}}}
 	settingsJSON, _ := json.Marshal(settings)
-	// CLAUDE_CODE_DISABLE_CLAUDE_MDS: the user's global CLAUDE.md is their own setup, noise here; the prompt reads the project's AGENTS.md itself.
-	// --setting-sources user: the repo is auto-trusted, so never load hooks/permissions from its .claude/ settings.
-	script := fmt.Sprintf("#!/bin/sh\ncd %s || exit 1\nPATH=%s:\"$PATH\"; export PATH # git/ddev resolve to the guard shims\nCLAUDE_CODE_DISABLE_CLAUDE_MDS=1 claude --model %s --strict-mcp-config --setting-sources user --permission-mode %s --settings %s --add-dir %s --allowedTools=%s --disallowedTools=%s \"$(cat %s)\"\necho $? > %s\n",
+	// Vanilla session, ~70% fewer input tokens than with the user's setup (measured): no CLAUDE.md files (the prompt
+	// reads the project's AGENTS.md itself), no settings files (so no user/repo hooks or plugins), no skills, core tools
+	// only; --settings still applies (Stop hook). Static system prompt so concurrent runs share the prompt cache.
+	script := fmt.Sprintf("#!/bin/sh\ncd %s || exit 1\nPATH=%s:\"$PATH\"; export PATH # git/ddev resolve to the guard shims\nCLAUDE_CODE_DISABLE_CLAUDE_MDS=1 claude --model %s --strict-mcp-config --setting-sources '' --disable-slash-commands --tools=Bash,Read,Edit,Write,Grep,Glob,WebFetch,WebSearch --exclude-dynamic-system-prompt-sections --permission-mode %s --settings %s --add-dir %s --allowedTools=%s --disallowedTools=%s \"$(cat %s)\"\necho $? > %s\n",
 		sq(path), sq(filepath.Join(runDir, "bin")), sq(claudeCfg.model), sq(claudeCfg.permission), sq(filepath.Join(runDir, "settings.json")), sq(outDir),
 		sq(strings.Join(claudeCfg.allowed, ",")), sq(strings.Join(claudeDenied, ",")), sq(filepath.Join(runDir, "prompt.md")), sq(exitFile))
 	exe, err := os.Executable()

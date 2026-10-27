@@ -131,7 +131,7 @@ Flows that need more than loading a page belong in the project's own repo, in `A
 - Log in as an editor, create a news item with an image, check it on /nl/nieuws.
 ```
 
-Your global `~/.claude/CLAUDE.md` is not loaded in update sessions (`CLAUDE_CODE_DISABLE_CLAUDE_MDS=1`).
+Update sessions run vanilla Claude Code: no CLAUDE.md files, no user/project settings (so no plugins or hooks of your own), no skills, core tools only. That cut input tokens by ~70% in a test run.
 
 The agent works autonomously with every tool. Hard limits, enforced twice (permission deny rules, and read-only `git`/`ddev` shims in `runs/<project>/bin` that run the app's hidden `guard` subcommand, `executor/guard.go`, which also catches aliases, global options and grouped flags):
 - **No commits, merges or pushes**: `git commit/merge/push/cherry-pick/revert/am`, and `git pull` without `--rebase`/`--ff-only`.
