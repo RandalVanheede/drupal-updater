@@ -281,6 +281,11 @@ func (a *App) CleanupBranch(projectName string) error {
 }
 
 func main() {
+	// git/ddev guard behind the shims of a Claude run (see executor/guard.go)
+	if len(os.Args) > 1 && os.Args[1] == "guard" {
+		os.Exit(executor.Guard(os.Args[2:]))
+	}
+
 	// If invoked with "api" subcommand, handle it (for CLI compatibility)
 	if len(os.Args) > 1 && os.Args[1] == "api" {
 		api.Run(os.Args[2:])

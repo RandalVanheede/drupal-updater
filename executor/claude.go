@@ -189,7 +189,6 @@ func safeName(s string) string {
 }
 
 // tmuxPath prefers the copy bundled inside the .app, then a tmux on the enriched PATH.
-// (exec.LookPath uses the process PATH, which is minimal for GUI apps.)
 func tmuxPath() string {
 	if exe, err := os.Executable(); err == nil {
 		bundled := filepath.Join(filepath.Dir(exe), "..", "Resources", "tmux-bundle", "tmux")
@@ -197,16 +196,22 @@ func tmuxPath() string {
 			return bundled
 		}
 	}
+	return lookEnriched("tmux")
+}
+
+// lookEnriched finds name on the enriched PATH, else returns name unchanged.
+// (exec.LookPath uses the process PATH, which is minimal for GUI apps.)
+func lookEnriched(name string) string {
 	for _, e := range EnrichedEnv() {
 		if v, ok := strings.CutPrefix(e, "PATH="); ok {
 			for _, dir := range filepath.SplitList(v) {
-				if p := filepath.Join(dir, "tmux"); isExecutable(p) {
+				if p := filepath.Join(dir, name); isExecutable(p) {
 					return p
 				}
 			}
 		}
 	}
-	return "tmux"
+	return name
 }
 
 func isExecutable(p string) bool {
@@ -318,18 +323,38 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 		allowed = append(allowed, "Edit(/"+path+"/**)")
 	}
 	denied := append([]string(nil), claudeDenied...)
-	for _, f := range []string{"run.sh", "import-db.sh", "settings.json", "prompt.md"} {
+	for _, f := range []string{"run.sh", "import-db.sh", "settings.json", "prompt.md", "bin/git", "bin/ddev", ddevBaselineFile} {
 		denied = append(denied, "Edit(/"+filepath.Join(runDir, f)+")") // "//" = absolute path; Edit rules cover Write too
 	}
 	// --setting-sources user: the repo is auto-trusted, so never load hooks/permissions from its .claude/ settings.
-	script := fmt.Sprintf("#!/bin/sh\ncd %s || exit 1\nclaude --model %s --strict-mcp-config --setting-sources user --permission-mode %s --settings %s --add-dir %s --allowedTools=%s --disallowedTools=%s \"$(cat %s)\"\necho $? > %s\n",
-		sq(path), sq(claudeCfg.model), sq(claudeCfg.permission), sq(filepath.Join(runDir, "settings.json")), sq(outDir),
+	script := fmt.Sprintf("#!/bin/sh\ncd %s || exit 1\nPATH=%s:\"$PATH\"; export PATH # git/ddev resolve to the guard shims\nclaude --model %s --strict-mcp-config --setting-sources user --permission-mode %s --settings %s --add-dir %s --allowedTools=%s --disallowedTools=%s \"$(cat %s)\"\necho $? > %s\n",
+		sq(path), sq(filepath.Join(runDir, "bin")), sq(claudeCfg.model), sq(claudeCfg.permission), sq(filepath.Join(runDir, "settings.json")), sq(outDir),
 		sq(strings.Join(allowed, ",")), sq(strings.Join(denied, ",")), sq(filepath.Join(runDir, "prompt.md")), sq(exitFile))
+	exe, err := os.Executable()
+	if err != nil {
+		fail("cannot locate own binary for the git/ddev guard: " + err.Error())
+		return
+	}
+	realGit, realDdev := lookEnriched("git"), lookEnriched("ddev")
+	if !filepath.IsAbs(realGit) || !filepath.IsAbs(realDdev) {
+		fail("git and ddev must be installed (not found on PATH)")
+		return
+	}
+	if err := os.MkdirAll(filepath.Join(runDir, "bin"), 0o755); err != nil {
+		fail(err.Error())
+		return
+	}
+	if err := writeDdevBaseline(path, runDir); err != nil {
+		fail("cannot record .ddev state: " + err.Error())
+		return
+	}
 	files := map[string]string{"prompt.md": prompt, "settings.json": string(settingsJSON), "run.sh": script,
-		"import-db.sh": fmt.Sprintf(importDBScript, sq(root), dumpMaxAgeDays)}
+		"import-db.sh": fmt.Sprintf(importDBScript, sq(root), dumpMaxAgeDays),
+		"bin/git":      fmt.Sprintf("#!/bin/sh\nexec %s guard git %s %s \"$@\"\n", sq(exe), sq(realGit), sq(runDir)),
+		"bin/ddev":     fmt.Sprintf("#!/bin/sh\nDRUPAL_UPDATER_GIT=%s exec %s guard ddev %s %s \"$@\"\n", sq(realGit), sq(exe), sq(realDdev), sq(runDir))}
 	for f, content := range files {
 		perm := os.FileMode(0o444) // read-only, so a shell redirect can't rewrite them either
-		if f == "import-db.sh" {
+		if f == "import-db.sh" || strings.HasPrefix(f, "bin/") {
 			perm = 0o555
 		}
 		os.Remove(filepath.Join(runDir, f)) // earlier run's copy is read-only

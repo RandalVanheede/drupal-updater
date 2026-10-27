@@ -16,6 +16,11 @@ import (
 )
 
 func main() {
+	// git/ddev guard behind the shims of a Claude run (see executor/guard.go)
+	if len(os.Args) > 1 && os.Args[1] == "guard" {
+		os.Exit(executor.Guard(os.Args[2:]))
+	}
+
 	logging.Init()
 	defer logging.Close()
 
