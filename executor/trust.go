@@ -14,7 +14,6 @@ var trustMu sync.Mutex
 
 // trustFolder marks the project's git root as trusted in ~/.claude.json so Claude skips
 // the "trust this folder" dialog. Trust is keyed by git root, not by subfolder.
-// shortcut: read-modify-write races with a running claude saving the same file, tiny window; add file locking if it bites.
 func trustFolder(path string) error {
 	root := path
 	if out, err := git(path, "rev-parse", "--show-toplevel"); err == nil && strings.TrimSpace(out) != "" {
@@ -32,19 +31,31 @@ func trustFolder(path string) error {
 	trustMu.Lock()
 	defer trustMu.Unlock()
 
+	// Claude may save the file between our read and rename; if it changed, start over so its write isn't lost.
+	for attempt := 0; attempt < 3; attempt++ {
+		if changed, err := setTrusted(file, root); err != nil || !changed {
+			return err
+		}
+	}
+	return fmt.Errorf("%s kept changing while marking %s as trusted", file, root)
+}
+
+// setTrusted writes the trust flag for root; changed reports the file was modified by someone else mid-update.
+func setTrusted(file, root string) (changed bool, err error) {
 	doc := map[string]any{}
 	mode := os.FileMode(0o600)
-	if data, err := os.ReadFile(file); err == nil {
-		dec := json.NewDecoder(bytes.NewReader(data))
+	orig, err := os.ReadFile(file)
+	if err == nil {
+		dec := json.NewDecoder(bytes.NewReader(orig))
 		dec.UseNumber() // keep big numbers exact on rewrite
 		if err := dec.Decode(&doc); err != nil {
-			return fmt.Errorf("parse %s: %w", file, err) // never overwrite a file we cannot read
+			return false, fmt.Errorf("parse %s: %w", file, err) // never overwrite a file we cannot read
 		}
 		if st, err := os.Stat(file); err == nil {
 			mode = st.Mode().Perm()
 		}
 	} else if !os.IsNotExist(err) {
-		return err
+		return false, err
 	}
 
 	projects, _ := doc["projects"].(map[string]any)
@@ -58,17 +69,22 @@ func trustFolder(path string) error {
 		projects[root] = entry
 	}
 	if ok, _ := entry["hasTrustDialogAccepted"].(bool); ok {
-		return nil
+		return false, nil
 	}
 	entry["hasTrustDialogAccepted"] = true
 
 	data, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
-		return err
+		return false, err
 	}
 	tmp := file + ".drupal-updater.tmp"
 	if err := os.WriteFile(tmp, data, mode); err != nil {
-		return err
+		return false, err
 	}
-	return os.Rename(tmp, file)
+	// shortcut: a write landing between this check and the rename is still lost (microseconds); use file locking if Claude ever adopts it.
+	if now, err := os.ReadFile(file); (err == nil) != (orig != nil) || !bytes.Equal(now, orig) {
+		os.Remove(tmp)
+		return true, nil
+	}
+	return false, os.Rename(tmp, file)
 }

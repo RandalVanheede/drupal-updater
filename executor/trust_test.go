@@ -34,3 +34,14 @@ func TestTrustFolderPreservesFile(t *testing.T) {
 		t.Fatal("big number mangled")
 	}
 }
+
+func TestTrustFolderCreatesMissingFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := trustFolder(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(filepath.Join(home, ".claude.json")); err != nil || !strings.Contains(string(data), "hasTrustDialogAccepted") {
+		t.Fatalf("not created: %v %s", err, data)
+	}
+}
