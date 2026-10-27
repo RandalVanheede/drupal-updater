@@ -39,6 +39,7 @@ func Guard(args []string) int {
 	}
 	tool, real, runDir, rest := args[0], args[1], args[2], args[3:]
 	var sub string
+	var verified map[string]string // .ddev surface checkDdev approved; the "before" state of a ddev start
 	err := checkCwd(root)
 	if err == nil {
 		// hooks/filters/url rewrites in .git/config would run on the host; .git is writable from the containers
@@ -51,7 +52,7 @@ func Guard(args []string) int {
 			sub = rest[0] // checked non-empty above
 			rest = append([]string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"}, rest...)
 		case "ddev":
-			err = checkDdev(root, runDir)
+			verified, err = checkDdev(root, runDir)
 		default:
 			err = fmt.Errorf("unknown tool %q", tool)
 		}
@@ -61,10 +62,6 @@ func Guard(args []string) int {
 		return 126
 	}
 	starting := tool == "ddev" && len(rest) > 0 && (rest[0] == "start" || rest[0] == "restart")
-	var before map[string]string
-	if starting {
-		before, _ = workingSurface(root)
-	}
 	cmd := exec.Command(real, rest...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	runErr := cmd.Run()
@@ -80,10 +77,10 @@ func Guard(args []string) int {
 			}
 		}
 	}
-	if starting && runErr == nil && before != nil {
+	if starting && runErr == nil {
 		// ddev rewrites its own generated files (providers, host command READMEs) when it is upgraded.
 		// shortcut: a container process rewriting an existing marked file during this start is trusted too; pin hashes per ddev version if it matters.
-		if err := trustGenerated(root, runDir, before); err != nil {
+		if err := trustGenerated(root, runDir, verified); err != nil {
 			fmt.Fprintf(os.Stderr, "drupal-updater guard: %v\n", err)
 		}
 	}
@@ -333,14 +330,14 @@ func treeSurface(real, projectDir, ref string) (map[string]string, error) {
 // that path: in the working tree at run start, or on a remote-tracking branch as fetched at run start
 // or by the guard's own fetch/pull. Per file, so local-only files and pulled upstream updates can mix;
 // deleting a file never adds host code. Refs are never read live: code in a container could forge them.
-func checkDdev(root, runDir string) error {
+func checkDdev(root, runDir string) (map[string]string, error) {
 	current, err := workingSurface(root)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	trusted, err := readTrusted(runDir)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var untrusted []string
 	for f, sum := range current {
@@ -349,10 +346,10 @@ func checkDdev(root, runDir string) error {
 		}
 	}
 	if len(untrusted) == 0 {
-		return nil
+		return current, nil
 	}
 	slices.Sort(untrusted)
-	return fmt.Errorf("ddev: these .ddev files run on the host and their content matches neither the run start nor any fetched upstream branch: %s. "+
+	return nil, fmt.Errorf("ddev: these .ddev files run on the host and their content matches neither the run start nor any fetched upstream branch: %s. "+
 		"Restore them (git checkout -- <file> for the committed version, or git stash pop if the user's local edits are stashed), then retry", strings.Join(untrusted, ", "))
 }
 
@@ -371,8 +368,8 @@ func readTrusted(runDir string) ([]map[string]string, error) {
 	return trusted, nil
 }
 
-// trustGenerated adds host-executing .ddev files that ddev rewrote during a start: files that existed
-// before (never new ones), changed, and still carry ddev's "#ddev-generated" marker.
+// trustGenerated adds host-executing .ddev files that ddev rewrote during a start: files whose
+// verified (so trusted) before-content changed, never new ones, still carrying "#ddev-generated".
 func trustGenerated(root, runDir string, before map[string]string) error {
 	trusted, err := readTrusted(runDir)
 	if err != nil {
