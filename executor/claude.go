@@ -67,7 +67,7 @@ var defaultClaudeAllowed = []string{
 	"Read", "Grep", "Glob", "Bash(sleep *)",
 	"Bash(git status*)", "Bash(git log*)", "Bash(git diff*)", "Bash(git show*)", "Bash(git rev-parse*)", "Bash(git symbolic-ref*)",
 	"Bash(git branch*)", "Bash(git checkout*)", "Bash(git switch*)", "Bash(git fetch*)", "Bash(git pull*)", "Bash(git stash*)",
-	"Bash(git remote*)", "Bash(git ls-remote*)", "Bash(git merge*)", "Bash(git rebase*)", "Bash(git add*)", "Bash(git commit*)", "Bash(git restore*)",
+	"Bash(git remote -v*)", "Bash(git remote show*)", "Bash(git remote get-url*)", "Bash(git merge*)", "Bash(git rebase*)", "Bash(git add*)", "Bash(git commit*)", "Bash(git restore*)",
 	"Bash(ddev describe*)", "Bash(ddev start*)", "Bash(ddev stop*)", "Bash(ddev restart*)", "Bash(ddev list*)", "Bash(ddev logs*)",
 	"Bash(ddev poweroff*)", "Bash(ddev snapshot*)", "Bash(ddev pull*)",
 	"Bash(ddev composer install*)", "Bash(ddev composer update*)", "Bash(ddev composer require*)", "Bash(ddev composer remove*)",
@@ -91,7 +91,9 @@ var claudeDenied = []string{
 	"Bash(git -c*)", "Bash(git * -c *)", "Bash(git config*)", "Bash(git submodule*)",
 	"Bash(composer exec*)", "Bash(composer run*)", "Bash(composer global*)", "Bash(composer config*)",
 	"Bash(ddev exec*)", "Bash(ddev ssh*)", "Bash(ddev import-db*)", "Bash(ddev config*)",
-	"Bash(git bisect*)", "Bash(git difftool*)", "Bash(git mergetool*)", "Bash(git * --exec*)", "Bash(git * -x*)", "Bash(git * --upload-pack*)", "Bash(git * --output*)", // --output writes any file
+	"Bash(git bisect*)", "Bash(git difftool*)", "Bash(git mergetool*)", "Bash(git * --exec*)", "Bash(git * -x*)", "Bash(git * --upload-pack*)", "Bash(git * --output*)", "Bash(git * --ou*)", "Bash(git * --upl*)", "Bash(git * --ex*)", // git accepts abbreviated options; --output writes any file
+	// only the repo's existing remotes: a new URL could bring in .ddev host commands via checkout/merge
+	"Bash(git * *://*)", "Bash(git * *@*.*)", "Bash(git * /*)", "Bash(git * ./*)", "Bash(git * ../*)", // no ":" in patterns: it is the legacy prefix syntax
 	"Bash(git grep*)", "Bash(git * grep*)", "Bash(git * -O*)", "Bash(git * --open-files-in-pager*)", // grep -O runs a pager program
 	"Bash(git --config-env*)", "Bash(git * --config-env*)", "Bash(git -C*)", "Bash(git --exec-path*)", "Bash(git --git-dir*)", "Bash(git --work-tree*)",
 	"Bash(git * --exec-path*)", "Bash(git * --git-dir*)", "Bash(git * --work-tree*)", "Bash(git * -C *)",
