@@ -12,7 +12,7 @@ drupal-updater/
 ├── logging/         # File logger
 ├── ui/              # Bubbletea TUI (list, input, running views, config editor)
 ├── desktop/         # Wails desktop app (Go bindings in main.go, Svelte frontend)
-└── scripts/         # build-dmg.sh (macOS), build-linux.sh, bundle-tmux.sh
+└── scripts/         # build-dmg.sh (macOS), build-linux.sh, build-linux-docker.sh (any CPU), bundle-tmux.sh
 ```
 
 ## Building
@@ -21,9 +21,10 @@ drupal-updater/
 |--------|---------|--------|
 | TUI (any OS) | `go build -o drupal-updater .` | `./drupal-updater` |
 | macOS desktop | `scripts/build-dmg.sh` | `desktop/build/bin/Drupal-Updater.dmg` (tmux bundled; the `.app` is not kept, so Spotlight only finds the installed one) |
-| Linux desktop | `scripts/build-linux.sh` (on Linux; needs `libgtk-3-dev` + `libwebkit2gtk-4.1-dev` or `-4.0-dev`) | `desktop/build/bin/drupal-updater-linux-<arch>.tar.gz`, unpack and run `install.sh` |
+| Linux desktop | `scripts/build-linux.sh` (on Linux, for its own CPU; needs `libgtk-3-dev` + `libwebkit2gtk-4.1-dev` or `-4.0-dev`) | `desktop/build/bin/drupal-updater-linux-<arch>.tar.gz`, unpack and run `install.sh` |
+| Linux desktop, any host/CPU | `scripts/build-linux-docker.sh [amd64] [arm64]` (needs Docker; default both) | `drupal-updater-linux-x86_64.tar.gz`, `drupal-updater-linux-aarch64.tar.gz` |
 
-Wails can't cross-compile between operating systems, so build the Linux desktop app on Linux (or in Docker). On Linux, tmux and claude must be installed on the system.
+Wails can't cross-compile between operating systems or CPUs (webkit needs cgo), so `build-linux-docker.sh` builds inside a Linux container per architecture; a foreign CPU is emulated by Docker and takes several minutes. On Linux, tmux and claude must be installed on the system.
 
 ``
 
