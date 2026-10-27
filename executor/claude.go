@@ -38,9 +38,19 @@ Steps, in order:
 4. ddev composer install
 5. ddev drush deploy -y
 6. ddev composer update 'drupal/core-*' 'symfony/*' 'twig/*' --with-all-dependencies
-7. ddev drush updb -y
-8. ddev drush cex -y
-9. ddev stop
+7. Security updates, see below
+8. ddev drush updb -y
+9. ddev drush cex -y
+10. ddev stop
+
+Security updates (step 7). Goal: fix every security advisory that can be fixed without a major upgrade.
+- Find advisories with ddev composer audit --format=json (it covers drupal/* and all other Composer packages). Cross-check Drupal ones with ddev drush pm:security if that command exists.
+- "Major" is the first version number as Composer sees it. Drupal contrib "8.x-1.5" is 1.5.0 to Composer, so 8.x-1.x and 1.x are the same major; 1.x to 2.x is a major upgrade.
+- Drupal core first, because contrib fixes may need a newer core minor: move drupal/core and its companions (drupal/core-recommended, drupal/core-composer-scaffold, drupal/core-project-message, and drupal/core-dev if required) together to the lowest fixed release within the installed major. A minor bump (e.g. 10.3 to 10.5) is fine; a new major (10 to 11) never.
+- Then every other affected package (contrib modules, themes, libraries such as guzzlehttp/*): the lowest fixed version within the installed major. Use ddev composer update <package> --with-all-dependencies when composer.json allows it; otherwise widen the constraint within the same major with ddev composer require '<package>:^<x.y>' --with-all-dependencies.
+- Skip an advisory, and keep going with the rest, when the fix needs: a new major of the package, a new major of Drupal core (directly or through its dependencies), a newer PHP than the project runs, or an update of a package listed below as not to be updated. Never use --ignore-platform-reqs. Never move core to a new major.
+- If one package's fix conflicts, revert just that change (git checkout -- composer.json composer.lock, then redo the others) rather than giving up on all of them.
+- Finish with ddev composer audit again and compare: every advisory left must be one you deliberately skipped.
 
 Packages that must NOT be updated: {{ignored_packages}}
 {{project_instructions}}
@@ -51,6 +61,7 @@ Solve simple problems yourself and retry, for example:
 - autostash pop conflict on a local-only config file (e.g. .ddev/*): keep the upstream version (git checkout -- <file>) and continue, but never drop that stash: it holds the user's own local edits (the app prunes old drupal-updater stashes itself). Mention the stash in the summary.
 - ddev refuses to start because the existing database type/version differs from .ddev/config.yaml (e.g. the volume holds mysql:8.0, config says mariadb:10.11): convert the data to the configured type. ddev utility migrate-database needs the config to match the current volume first, so: ddev config --database=<volume type:version>, then ddev utility migrate-database <configured type:version> (it keeps the data and writes the configured type back). Afterwards make sure .ddev/config.yaml equals the upstream version again (git diff .ddev/config.yaml). Never reset or delete the database.
 - ddev refuses to start because upstream renamed the project (name in .ddev/config.yaml differs from the one registered for this directory): ddev stop --unlist <old-name>, then ddev start. Then check the site boots (ddev drush status). If the database is missing or empty afterwards, try to restore one yourself: ddev snapshot restore --latest, ddev pull if configured, or a recent dump in the project via ddev import-db --file=<file>. Report failure only if none works.
+Skipped security advisories are not a failure: report them in the summary and still finish with status success.
 Be persistent. Diagnose every problem (read the error, inspect state, check logs) and fix it yourself, including composer conflicts, merge/stash conflicts, ddev/docker issues, config import errors and failing update hooks. Try several different approaches before giving up. Only report failure when the problem truly needs a human: missing credentials or access, a decision only the owner can make, or an action you are not permitted to take (see Rules). When you do fail, say exactly what you tried and what is needed.
 
 Rules (enforced; refused commands explain what to do instead):
@@ -59,7 +70,7 @@ Rules (enforced; refused commands explain what to do instead):
 - Keep the changes to what the update needs; local environment fixes (.ddev, database) are fine.
 
 Finish by writing the file {{result_file}} containing JSON only:
-{"status": "success" | "failed", "summary": "<one or two sentences: what was updated, or what failed and why>"}
+{"status": "success" | "failed", "summary": "<what was updated (core version change, each security update with old -> new version), each skipped advisory with its reason; or what failed and why>"}
 On success you must be on branch {{temp_branch}} when you write it. On failure, first return to the start branch (stash a dirty tree if needed) and delete {{temp_branch}}, then write the file.`
 
 // The agent works autonomously with every tool; the hard limits live in claudeDenied and in the

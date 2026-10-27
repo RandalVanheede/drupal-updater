@@ -106,11 +106,13 @@ repo is on the temp branch, and cleans up on failure. Attach with `tmux -L drupa
 mode: claude                    # or "classic" (shell commands + auto-heal in Go)
 claude_model: sonnet            # always passed via --model
 claude_prompt: "..."            # template; default is executor.DefaultClaudePrompt
-                                # placeholders: {{project}} {{path}} {{start_branch}} {{temp_branch}} {{commands}} {{result_file}}
+                                # placeholders: {{project}} {{path}} {{start_branch}} {{temp_branch}} {{ignored_packages}} {{project_instructions}} {{commands}} {{result_file}}
 claude_allowed_tools: []        # default: all tools (Read Grep Glob Edit Write Bash WebFetch WebSearch)
 claude_permission_mode: dontAsk # unlisted tools are denied, never prompt
 claude_timeout_minutes: 60
 ```
+
+The default prompt updates core/symfony/twig within their constraints, then fixes every security advisory `composer audit` reports (Drupal core, contrib and other packages) that needs no major upgrade: core may move to a newer minor (10.3 → 10.5) but never a new major, other packages stay on their installed major. Skipped advisories are listed with their reason in the result summary.
 
 The agent works autonomously with every tool. Hard limits, enforced twice (permission deny rules, and read-only `git`/`ddev` shims in `runs/<project>/bin` that run the app's hidden `guard` subcommand, `executor/guard.go`, which also catches aliases, global options and grouped flags):
 - **No commits, merges or pushes**: `git commit/merge/push/cherry-pick/revert/am`, and `git pull` without `--rebase`/`--ff-only`.
