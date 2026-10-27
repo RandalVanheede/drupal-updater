@@ -1,0 +1,12 @@
+# Build output
+/drupal-updater
+/bin/
+/desktop/drupal-updater-desktop
+/desktop/build/bin/
+/desktop/frontend/dist/
+/desktop/frontend/node_modules/
+/desktop/frontend/package.json.md5
+
+# Local tooling / OS
+.omc/
+.DS_Store
