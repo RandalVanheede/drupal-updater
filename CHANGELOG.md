@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-28
+
 ### Added
 - Update mode toggle: Standard (default: `composer update`, minor and patch versions only) or Disaster (security fixes only, the previous behaviour). `update_mode` in the config; switch it on the desktop project screen or with `m` in the TUI.
 - Successful runs end with a Markdown table of the production packages that changed in `composer.lock`, like `composer-lock-diff --no-links --only-prod --md`.
@@ -25,5 +27,6 @@ First versioned release.
 - Classic mode: the configured shell commands with retries and auto-healing, no Claude.
 - Build scripts for macOS (`scripts/build-dmg.sh`) and Linux amd64/arm64 (`scripts/build-linux.sh`, `scripts/build-linux-docker.sh`), and a CI pipeline that builds them for each release tag.
 
-[Unreleased]: https://github.com/RandalVanheede/drupal-updater/compare/v1.0.0...1.0.x
+[Unreleased]: https://github.com/RandalVanheede/drupal-updater/compare/v1.0.1...1.0.x
+[1.0.1]: https://github.com/RandalVanheede/drupal-updater/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/RandalVanheede/drupal-updater/releases/tag/v1.0.0
