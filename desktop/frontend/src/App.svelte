@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import { DiscoverProjects, GetConfig, SaveConfig, StartUpdate, CancelProject, CancelAll, RenameBranch, CleanupBranch, RetryProjects, GetClaudeDefaults } from '../wailsjs/go/main/App';
+  import { DiscoverProjects, GetConfig, SaveConfig, StartUpdate, CancelProject, CancelAll, RenameBranch, CleanupBranch, RetryProjects, GetClaudeDefaults, SetUpdateMode } from '../wailsjs/go/main/App';
   import { EventsOn } from '../wailsjs/runtime/runtime';
 
   let view = $state('projects');
@@ -61,6 +61,7 @@
     config = {
       ...loaded, // keep keys this screen doesn't edit (max_attempts etc.)
       Mode: loaded.Mode || 'claude',
+      UpdateMode: loaded.UpdateMode || 'standard',
       ClaudeModel: loaded.ClaudeModel || 'sonnet',
       ClaudePermissionMode: loaded.ClaudePermissionMode || 'dontAsk',
       ClaudeTimeoutMinutes: loaded.ClaudeTimeoutMinutes || 60,
@@ -257,6 +258,15 @@
       {/if}
 
       <div class="footer-actions">
+        {#if config.Mode !== 'classic'}
+        <label class="update-mode">
+          Mode
+          <select bind:value={config.UpdateMode} onchange={() => SetUpdateMode(config.UpdateMode)}>
+            <option value="standard">Standard (all minor/patch updates)</option>
+            <option value="disaster">Disaster (security fixes only)</option>
+          </select>
+        </label>
+        {/if}
         <button class="btn-primary" onclick={startUpdate} disabled={!projects.some(p => selected[p.name])}>
           Update Selected
         </button>
@@ -723,6 +733,14 @@
     gap: 12px;
     padding-top: 12px;
     border-top: 1px solid #2a2a4a;
+  }
+
+  .update-mode {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.8rem;
+    color: #a0a0a0;
   }
 
   input[type="text"], input[type="number"], textarea {

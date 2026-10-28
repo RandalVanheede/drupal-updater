@@ -26,6 +26,7 @@ export namespace config {
 	    BaseFolder: string;
 	    MaxConcurrent: number;
 	    Mode: string;
+	    UpdateMode: string;
 	    ClaudeModel: string;
 	    ClaudePrompt: string;
 	    ClaudeAllowedTools: string[];
@@ -46,6 +47,7 @@ export namespace config {
 	        this.BaseFolder = source["BaseFolder"];
 	        this.MaxConcurrent = source["MaxConcurrent"];
 	        this.Mode = source["Mode"];
+	        this.UpdateMode = source["UpdateMode"];
 	        this.ClaudeModel = source["ClaudeModel"];
 	        this.ClaudePrompt = source["ClaudePrompt"];
 	        this.ClaudeAllowedTools = source["ClaudeAllowedTools"];

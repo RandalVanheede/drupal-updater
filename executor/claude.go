@@ -24,7 +24,7 @@ const (
 
 // DefaultClaudePrompt is used when claude_prompt is not set in the config.
 // Placeholders: {{project}} {{path}} {{start_branch}} {{temp_branch}} {{ignored_packages}} {{smoke_paths}}
-// {{project_instructions}} {{result_file}} and {{commands}} (the classic command list).
+// {{project_instructions}} {{result_file}} {{updates}} (the update_mode rules for step 8) and {{commands}} (the classic command list).
 const DefaultClaudePrompt = `You are updating the Drupal project "{{project}}" located at {{path}} (your working directory). Work fully autonomously: nobody is watching, so never ask questions.
 
 Branches:
@@ -41,21 +41,13 @@ Steps, in order:
 5. ddev drush deploy -y
 6. Smoke tests, baseline (see below): the site as it is before any update
 7. ddev composer update 'drupal/core-*' 'symfony/*' 'twig/*' --with-all-dependencies
-8. Security updates, see below
+8. Updates, see below
 9. ddev drush updb -y
 10. ddev drush cex -y
 11. Smoke tests again, after the update, and compare with the baseline (see below)
 12. ddev stop
 
-Security updates (step 8). Goal: fix every security advisory that can be fixed without a major upgrade.
-- Find advisories with ddev composer audit --format=json (it covers drupal/* and all other Composer packages). Cross-check Drupal ones with ddev drush pm:security if that command exists.
-- "Major" is the first version number as Composer sees it. Drupal contrib "8.x-1.5" is 1.5.0 to Composer, so 8.x-1.x and 1.x are the same major; 1.x to 2.x is a major upgrade.
-- Drupal core first, because contrib fixes may need a newer core minor: move drupal/core and its companions (drupal/core-recommended, drupal/core-composer-scaffold, drupal/core-project-message, and drupal/core-dev if required) together to the lowest fixed release within the installed major. A minor bump (e.g. 10.3 to 10.5) is fine; a new major (10 to 11) never.
-- Then every other affected package (contrib modules, themes, libraries such as guzzlehttp/*): the lowest fixed version within the installed major. Use ddev composer update <package> --with-all-dependencies when composer.json allows it; otherwise widen the constraint within the same major with ddev composer require '<package>:^<x.y>' --with-all-dependencies.
-- Skip an advisory, and keep going with the rest, when the fix needs: a new major of the package, a new major of Drupal core (directly or through its dependencies), a newer PHP than the project runs, or an update of a package listed below as not to be updated. Never use --ignore-platform-reqs. Never move core to a new major.
-- If one package's fix conflicts, revert just that change (git checkout -- composer.json composer.lock, then redo the others) rather than giving up on all of them.
-- Finish with ddev composer audit again and compare: every advisory left must be one you deliberately skipped.
-
+{{updates}}
 Smoke tests (steps 6 and 11). Run the same checks both times and keep the baseline results. Get the site URL from ddev describe; for admin pages log in with ddev drush uli and follow that link with curl, keeping the session in a cookie jar.
 - ddev drush status bootstraps Drupal; ddev drush cr succeeds.
 - Anonymous, each must return 200 without PHP errors, exceptions or "The website encountered an unexpected error" in the HTML: /, /user/login, the newest published node of each content type, /search if the search module is enabled. A made-up path must return 404, not 500.
@@ -76,7 +68,7 @@ Solve simple problems yourself and retry, for example:
 - autostash pop conflict on a local-only config file (e.g. .ddev/*): keep the upstream version (git checkout -- <file>) and continue, but never drop that stash: it holds the user's own local edits (the app prunes old drupal-updater stashes itself). Mention the stash in the summary.
 - ddev refuses to start because the existing database type/version differs from .ddev/config.yaml (e.g. the volume holds mysql:8.0, config says mariadb:10.11): convert the data to the configured type. ddev utility migrate-database needs the config to match the current volume first, so: ddev config --database=<volume type:version>, then ddev utility migrate-database <configured type:version> (it keeps the data and writes the configured type back). Afterwards make sure .ddev/config.yaml equals the upstream version again (git diff .ddev/config.yaml). Never reset or delete the database.
 - ddev refuses to start because upstream renamed the project (name in .ddev/config.yaml differs from the one registered for this directory): ddev stop --unlist <old-name>, then ddev start. Then check the site boots (ddev drush status). If the database is missing or empty afterwards, try to restore one yourself: ddev snapshot restore --latest, ddev pull if configured, or a recent dump in the project via ddev import-db --file=<file>. Report failure only if none works.
-Skipped security advisories are not a failure: report them in the summary and still finish with status success.
+Skipped updates and advisories are not a failure: report them in the summary and still finish with status success.
 Be persistent. Diagnose every problem (read the error, inspect state, check logs) and fix it yourself, including composer conflicts, merge/stash conflicts, ddev/docker issues, config import errors and failing update hooks. Try several different approaches before giving up. Only report failure when the problem truly needs a human: missing credentials or access, a decision only the owner can make, or an action you are not permitted to take (see Rules). When you do fail, say exactly what you tried and what is needed.
 
 Rules (enforced; refused commands explain what to do instead):
@@ -85,8 +77,24 @@ Rules (enforced; refused commands explain what to do instead):
 - Keep the changes to what the update needs; local environment fixes (.ddev, database) are fine.
 
 Finish by writing the file {{result_file}} containing JSON only:
-{"status": "success" | "failed", "summary": "<what was updated (core version change, each security update with old -> new version), each skipped advisory with its reason, smoke tests: checks run, regressions fixed, packages rolled back, pre-existing failures; or what failed and why>"}
+{"status": "success" | "failed", "summary": "<what was updated (core version change, each updated package with old -> new version), each skipped update or advisory with its reason, smoke tests: checks run, regressions fixed, packages rolled back, pre-existing failures; or what failed and why>"}
 On success you must be on branch {{temp_branch}} when you write it. On failure, first return to the start branch (stash a dirty tree if needed) and delete {{temp_branch}}, then write the file.`
+
+// Step 8 of DefaultClaudePrompt per update_mode, filled in as {{updates}}.
+const (
+	disasterUpdates = `Updates (step 8), disaster mode: security fixes only. Goal: fix every security advisory that can be fixed without a major upgrade.
+- Find advisories with ddev composer audit --format=json (it covers drupal/* and all other Composer packages). Cross-check Drupal ones with ddev drush pm:security if that command exists.
+- "Major" is the first version number as Composer sees it. Drupal contrib "8.x-1.5" is 1.5.0 to Composer, so 8.x-1.x and 1.x are the same major; 1.x to 2.x is a major upgrade.
+- Drupal core first, because contrib fixes may need a newer core minor: move drupal/core and its companions (drupal/core-recommended, drupal/core-composer-scaffold, drupal/core-project-message, and drupal/core-dev if required) together to the lowest fixed release within the installed major. A minor bump (e.g. 10.3 to 10.5) is fine; a new major (10 to 11) never.
+- Then every other affected package (contrib modules, themes, libraries such as guzzlehttp/*): the lowest fixed version within the installed major. Use ddev composer update <package> --with-all-dependencies when composer.json allows it; otherwise widen the constraint within the same major with ddev composer require '<package>:^<x.y>' --with-all-dependencies.
+- Skip an advisory, and keep going with the rest, when the fix needs: a new major of the package, a new major of Drupal core (directly or through its dependencies), a newer PHP than the project runs, or an update of a package listed below as not to be updated. Never use --ignore-platform-reqs. Never move core to a new major.
+- If one package's fix conflicts, revert just that change (git checkout -- composer.json composer.lock, then redo the others) rather than giving up on all of them.
+- Finish with ddev composer audit again and compare: every advisory left must be one you deliberately skipped.`
+	standardUpdates = `Updates (step 8), standard mode: every minor and patch update, never a major.
+- "Major" is the first version number as Composer sees it. Drupal contrib "8.x-1.5" is 1.5.0 to Composer, so 8.x-1.x and 1.x are the same major; 1.x to 2.x is a major upgrade.
+- Run ddev composer update --with-all-dependencies. If packages are listed below as not to be updated, name every other direct dependency instead (ddev composer show --direct --name-only).
+- Then check git diff composer.lock: any package that moved to a new major (possible with loose constraints such as * or >=) goes back to its old major with ddev composer require '<package>:^<old x.y>' --with-all-dependencies. Never move core to a new major. Never use --ignore-platform-reqs.`
+)
 
 // The agent works autonomously with every tool; the hard limits live in claudeDenied and in the
 // git/ddev guard shims (guard.go), which also catch forms these globs miss.
@@ -108,6 +116,7 @@ var claudeCfg struct {
 	enabled    bool
 	model      string
 	prompt     string
+	updates    string // {{updates}} text for the configured update_mode
 	allowed    []string
 	permission string
 	timeout    time.Duration
@@ -127,6 +136,10 @@ func configureClaude(cfg *config.Config) {
 	c.enabled = cfg.Mode != "classic"
 	c.model = orDefault(cfg.ClaudeModel, defaultClaudeModel)
 	c.prompt = orDefault(cfg.ClaudePrompt, DefaultClaudePrompt)
+	c.updates = standardUpdates
+	if cfg.UpdateMode == "disaster" {
+		c.updates = disasterUpdates
+	}
 	c.allowed = defaultClaudeAllowed
 	if len(cfg.ClaudeAllowedTools) > 0 {
 		c.allowed = cfg.ClaudeAllowedTools
@@ -291,7 +304,7 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 		proj.ClaudeInstructions = "\nExtra instructions for this project:\n" + proj.ClaudeInstructions + "\n"
 	}
 	prompt := strings.NewReplacer(
-		"{{ignored_packages}}", ignored, "{{smoke_paths}}", smoke, "{{project_instructions}}", proj.ClaudeInstructions,
+		"{{ignored_packages}}", ignored, "{{smoke_paths}}", smoke, "{{project_instructions}}", proj.ClaudeInstructions, "{{updates}}", claudeCfg.updates,
 		"{{project}}", name, "{{path}}", path, "{{start_branch}}", startBranch,
 		"{{temp_branch}}", tempBranch, "{{commands}}", strings.Join(numbered, "\n"), "{{result_file}}", resultFile,
 	).Replace(claudeCfg.prompt)
@@ -377,7 +390,7 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 				}
 			}
 			logging.Info("[%s] Claude finished: %s", name, r.Summary)
-			send("success", "Claude session", r.Summary)
+			send("success", "Claude session", r.Summary+LockDiff(path))
 			return
 		}
 

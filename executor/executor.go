@@ -392,5 +392,6 @@ func Run(ctx context.Context, projectName string, projectPath string, startBranc
 		ProjectName: projectName,
 		Status:      "success",
 		Command:     "All commands completed successfully",
+		Output:      LockDiff(projectPath),
 	}
 }

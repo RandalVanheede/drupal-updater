@@ -94,6 +94,16 @@ func (a *App) SaveConfig(cfg *config.Config) error {
 	return config.SaveConfig(a.configPath, cfg)
 }
 
+// SetUpdateMode switches between "disaster" (security fixes only) and "standard" (all minor/patch updates)
+// and saves it; runs that already started keep their mode.
+func (a *App) SetUpdateMode(mode string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.cfg.UpdateMode = mode
+	executor.Configure(a.cfg)
+	return config.SaveConfig(a.configPath, a.cfg)
+}
+
 type UpdateRequest struct {
 	Projects []string `json:"projects"`
 }

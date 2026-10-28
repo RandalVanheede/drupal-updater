@@ -312,6 +312,14 @@ func (m *model) updateList(msg tea.Msg) (*model, []tea.Cmd) {
 					m.selected[p.Name] = !allSelected
 				}
 				return m, nil
+			case "m": // this session only; the desktop app or config.yaml (update_mode) sets the saved default
+				if m.cfg.UpdateMode == "disaster" {
+					m.cfg.UpdateMode = "standard"
+				} else {
+					m.cfg.UpdateMode = "disaster"
+				}
+				executor.Configure(m.cfg)
+				return m, nil
 			case "u":
 				logging.Info("Starting execution from StateList")
 				m.state = StateRunning
@@ -821,9 +829,13 @@ func (m *model) View() string {
 			}
 		}
 		s.WriteString("\n")
-		s.WriteString(progressStyle.Render(fmt.Sprintf("  %d/%d selected", count, len(m.projects))))
+		mode := "standard (all minor/patch updates)"
+		if m.cfg.UpdateMode == "disaster" {
+			mode = "disaster (security fixes only)"
+		}
+		s.WriteString(progressStyle.Render(fmt.Sprintf("  %d/%d selected · mode: %s", count, len(m.projects), mode)))
 		s.WriteString("\n\n")
-		s.WriteString("  " + helpKey("u", "update") + "  " + helpKey("a", "toggle all") + "  " + helpKey("space", "toggle") + "  " + helpKey("q", "quit"))
+		s.WriteString("  " + helpKey("u", "update") + "  " + helpKey("a", "toggle all") + "  " + helpKey("space", "toggle") + "  " + helpKey("m", "mode") + "  " + helpKey("q", "quit"))
 		s.WriteString("\n  " + helpKey("type", "search") + "  " + helpKey("esc", "clear search") + "  " + helpKey("hint:", "") + progressStyle.Render("--config to manage settings"))
 		s.WriteString("\n")
 

@@ -21,4 +21,6 @@ export function RetryProjects(arg1:Array<string>):Promise<void>;
 
 export function SaveConfig(arg1:config.Config):Promise<void>;
 
+export function SetUpdateMode(arg1:string):Promise<void>;
+
 export function StartUpdate(arg1:main.UpdateRequest):Promise<void>;

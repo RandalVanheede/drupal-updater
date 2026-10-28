@@ -38,6 +38,10 @@ export function SaveConfig(arg1) {
   return window['go']['main']['App']['SaveConfig'](arg1);
 }
 
+export function SetUpdateMode(arg1) {
+  return window['go']['main']['App']['SetUpdateMode'](arg1);
+}
+
 export function StartUpdate(arg1) {
   return window['go']['main']['App']['StartUpdate'](arg1);
 }

@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+- Update mode toggle: Standard (default: `composer update`, minor and patch versions only) or Disaster (security fixes only, the previous behaviour). `update_mode` in the config; switch it on the desktop project screen or with `m` in the TUI.
+- Successful runs end with a Markdown table of the production packages that changed in `composer.lock`, like `composer-lock-diff --no-links --only-prod --md`.
+
 ## [1.0.0] - 2026-10-27
 
 First versioned release.

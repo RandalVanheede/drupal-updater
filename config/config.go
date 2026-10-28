@@ -20,6 +20,7 @@ type Config struct {
 	BaseFolder            string                   `yaml:"base_folder" json:"BaseFolder"`
 	MaxConcurrent         int                      `yaml:"max_concurrent" json:"MaxConcurrent"`
 	Mode                  string                   `yaml:"mode,omitempty" json:"Mode"`                  // "claude" (default) or "classic"
+	UpdateMode            string                   `yaml:"update_mode,omitempty" json:"UpdateMode"`     // "standard" (default, all minor/patch updates) or "disaster" (security fixes only), claude mode
 	ClaudeModel           string                   `yaml:"claude_model,omitempty" json:"ClaudeModel"`   // default sonnet
 	ClaudePrompt          string                   `yaml:"claude_prompt,omitempty" json:"ClaudePrompt"` // default: executor.DefaultClaudePrompt
 	ClaudeAllowedTools    []string                 `yaml:"claude_allowed_tools,omitempty" json:"ClaudeAllowedTools"`
