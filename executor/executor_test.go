@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"testing"
+	"time"
 )
 
 // shellCmd runs a shell snippet for test setup.
@@ -91,5 +92,16 @@ func TestTempBranch(t *testing.T) {
 		if got := TempBranch(in); got != want {
 			t.Errorf("TempBranch(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestFinalBranch(t *testing.T) {
+	today := time.Now().Format("2006-01-02")
+	dir := gitRepo(t, "git branch hotfix/"+today+"-drupal-updates && git branch hotfix/"+today+"-drupal-updates-2")
+	if got := FinalBranch(dir, "hotfix/{date}-drupal-updates", "My Site"); got != "hotfix/"+today+"-drupal-updates-3" {
+		t.Errorf("taken name not bumped: %q", got)
+	}
+	if got := FinalBranch(dir, "release/*-{date}", "My Site"); got != "release/my-site-"+today {
+		t.Errorf("got %q", got)
 	}
 }

@@ -252,6 +252,17 @@ func (a *App) CancelProject(name string) {
 	}
 }
 
+// FinalBranch is the suggested name for a project's successful temp branch, from its branch pattern.
+func (a *App) FinalBranch(projectName string) (string, error) {
+	projectPath, err := a.projectPath(projectName)
+	if err != nil {
+		return "", err
+	}
+	pCfg := a.cfg.Projects[projectName]
+	pCfg.MergeWithDefaults()
+	return executor.FinalBranch(projectPath, pCfg.GitNewBranchPattern, projectName), nil
+}
+
 func (a *App) RenameBranch(projectName, finalBranch string) error {
 	projectPath, err := a.projectPath(projectName)
 	if err != nil {

@@ -11,6 +11,8 @@ export function CleanupBranch(arg1:string):Promise<void>;
 
 export function DiscoverProjects():Promise<Array<main.ProjectInfo>>;
 
+export function FinalBranch(arg1:string):Promise<string>;
+
 export function GetClaudeDefaults():Promise<Record<string, any>>;
 
 export function GetConfig():Promise<config.Config>;

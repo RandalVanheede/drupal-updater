@@ -9,6 +9,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 ### Added
 - Multiple project folders: `base_folders` (each scanned one level deep) and `project_paths` (single projects anywhere). The old `base_folder` key is migrated. Projects with the same folder name are shown as `<parent>/<folder>`.
 
+### Changed
+- Final branch names include the date: the default pattern is `hotfix/{date}-drupal-updates` (`{date}` = YYYY-MM-DD, `*` still the project slug). A name that already exists gets `-2`, `-3`, ... Projects still on the old default `hotfix/*` get the new one.
+
 ### Removed
 - Classic mode (shell commands with retries and auto-healing). Claude is the only runner; the `mode`, `commands`, `default_commands`, `max_attempts` and `command_timeout_minutes` settings and the `{{commands}}` prompt placeholder are gone (old keys are ignored).
 

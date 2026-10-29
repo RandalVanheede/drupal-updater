@@ -18,6 +18,10 @@ export function DiscoverProjects() {
   return window['go']['main']['App']['DiscoverProjects']();
 }
 
+export function FinalBranch(arg1) {
+  return window['go']['main']['App']['FinalBranch'](arg1);
+}
+
 export function GetClaudeDefaults() {
   return window['go']['main']['App']['GetClaudeDefaults']();
 }

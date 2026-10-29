@@ -30,10 +30,13 @@ type Config struct {
 	Projects             map[string]ProjectConfig `yaml:"projects" json:"Projects"`
 }
 
+// DefaultBranchPattern names the branch a successful run is renamed to: {date} = YYYY-MM-DD, * = project slug.
+const DefaultBranchPattern = "hotfix/{date}-drupal-updates"
+
 func DefaultProjectConfig() ProjectConfig {
 	return ProjectConfig{
 		GitStartBranch:      "master",
-		GitNewBranchPattern: "hotfix/*",
+		GitNewBranchPattern: DefaultBranchPattern,
 	}
 }
 
@@ -43,7 +46,7 @@ func (pc *ProjectConfig) MergeWithDefaults() {
 	if pc.GitStartBranch == "" {
 		pc.GitStartBranch = defaults.GitStartBranch
 	}
-	if pc.GitNewBranchPattern == "" {
+	if pc.GitNewBranchPattern == "" || pc.GitNewBranchPattern == "hotfix/*" { // hotfix/* = old default, saved into every project
 		pc.GitNewBranchPattern = defaults.GitNewBranchPattern
 	}
 }

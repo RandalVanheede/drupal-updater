@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import { DiscoverProjects, GetConfig, SaveConfig, StartUpdate, CancelProject, CancelAll, RenameBranch, CleanupBranch, RetryProjects, GetClaudeDefaults, SetUpdateMode } from '../wailsjs/go/main/App';
+  import { DiscoverProjects, GetConfig, SaveConfig, StartUpdate, CancelProject, CancelAll, RenameBranch, CleanupBranch, RetryProjects, GetClaudeDefaults, SetUpdateMode, FinalBranch } from '../wailsjs/go/main/App';
   import { EventsOn } from '../wailsjs/runtime/runtime';
 
   let view = $state('projects');
@@ -45,14 +45,12 @@
       }
     });
 
-    EventsOn('all-done', () => {
+    EventsOn('all-done', async () => {
       allDone = true;
-      // Pre-fill branch names for successful projects
-      Object.keys(statuses).forEach(name => {
-        const pc = config.Projects?.[name] || {};
-        const pattern = pc.GitNewBranchPattern || 'hotfix/*';
-        branchNames[name] = pattern.replace('*', sanitize(name));
-      });
+      // Pre-fill branch names from each project's pattern (backend skips names already taken)
+      await Promise.all(Object.keys(statuses).map(async name => {
+        branchNames[name] = await FinalBranch(name).catch(() => '');
+      }));
       view = 'confirm';
     });
 
@@ -89,10 +87,6 @@
   function toggleAll() {
     const allSelected = projects.every(p => selected[p.name]);
     projects.forEach(p => selected[p.name] = !allSelected);
-  }
-
-  function sanitize(name) {
-    return name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
   }
 
   function startUpdate() {
@@ -146,7 +140,7 @@
     if (newProjectName && !config.Projects[newProjectName]) {
       config.Projects[newProjectName] = {
         GitStartBranch: 'master',
-        GitNewBranchPattern: 'hotfix/*',
+        GitNewBranchPattern: '', // empty = default pattern
         IgnoredPackages: [],
         SmokePaths: [],
       };
@@ -344,7 +338,7 @@
                 </label>
                 <label>
                   Branch pattern
-                  <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" bind:value={config.Projects[name].GitNewBranchPattern} />
+                  <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="hotfix/{'{date}'}-drupal-updates" bind:value={config.Projects[name].GitNewBranchPattern} />
                 </label>
                 <label>
                   Ignored packages (comma-separated)

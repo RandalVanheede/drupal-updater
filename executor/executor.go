@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"time"
 )
 
 // loginShell returns the user's default shell, falling back to /bin/sh.
@@ -69,6 +70,20 @@ func BranchSlug(s string) string {
 
 // TempBranch is the branch a project's update runs on before it is renamed or cleaned up.
 func TempBranch(project string) string { return "drupal-updater/temp-" + BranchSlug(project) }
+
+// FinalBranch fills a branch pattern ({date} = today as YYYY-MM-DD, * = project slug) and appends
+// -2, -3, ... while that branch exists locally or on origin, so a second run on one day gets its own name.
+func FinalBranch(projectPath, pattern, project string) string {
+	name := strings.NewReplacer("{date}", time.Now().Format("2006-01-02"), "*", BranchSlug(project)).Replace(pattern)
+	for i, candidate := 2, name; ; i++ {
+		_, local := git(projectPath, "rev-parse", "--verify", "--quiet", "refs/heads/"+candidate)
+		_, remote := git(projectPath, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+candidate)
+		if local != nil && remote != nil {
+			return candidate
+		}
+		candidate = fmt.Sprintf("%s-%d", name, i)
+	}
+}
 
 // git runs git directly (no shell) so branch names can't inject commands.
 func git(dir string, args ...string) (string, error) {

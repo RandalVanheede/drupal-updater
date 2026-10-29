@@ -10,7 +10,7 @@ import (
 func TestMergeWithDefaults(t *testing.T) {
 	pc := ProjectConfig{}
 	pc.MergeWithDefaults()
-	if pc.GitStartBranch != "master" || pc.GitNewBranchPattern != "hotfix/*" {
+	if pc.GitStartBranch != "master" || pc.GitNewBranchPattern != DefaultBranchPattern {
 		t.Fatalf("defaults not applied: %+v", pc)
 	}
 
@@ -18,6 +18,12 @@ func TestMergeWithDefaults(t *testing.T) {
 	pc.MergeWithDefaults()
 	if pc.GitStartBranch != "main" || pc.GitNewBranchPattern != "feature/*" {
 		t.Fatalf("overrides lost: %+v", pc)
+	}
+
+	pc = ProjectConfig{GitNewBranchPattern: "hotfix/*"}
+	pc.MergeWithDefaults()
+	if pc.GitNewBranchPattern != DefaultBranchPattern {
+		t.Fatalf("old default not migrated: %+v", pc)
 	}
 }
 

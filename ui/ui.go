@@ -728,13 +728,11 @@ func (m *model) startExecution() {
 		pCfg := m.cfg.Projects[p.Name]
 		pCfg.MergeWithDefaults()
 
-		// Build temp branch name
-		sanitized := executor.BranchSlug(p.Name)
 		tempBranch := executor.TempBranch(p.Name)
 		m.tempBranches[p.Name] = tempBranch
 
-		// Pre-fill final branch name from pattern (replace * with sanitized project name)
-		finalBranch := strings.Replace(pCfg.GitNewBranchPattern, "*", sanitized, 1)
+		// Pre-fill final branch name from the pattern; editable on the confirm screen
+		finalBranch := executor.FinalBranch(p.Path, pCfg.GitNewBranchPattern, p.Name)
 		m.branchNames[p.Name] = finalBranch
 
 		logging.Info("[%s] temp branch: %s, final branch: %s", p.Name, tempBranch, finalBranch)
