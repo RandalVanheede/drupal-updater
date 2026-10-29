@@ -11,7 +11,19 @@ type Project struct {
 	Path string
 }
 
-func DiscoverProjects(baseFolder string, excludedProjects []string) ([]Project, error) {
+func expandHome(p string) string {
+	if strings.HasPrefix(p, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, p[2:])
+		}
+	}
+	return filepath.Clean(p)
+}
+
+// DiscoverProjects scans each base folder one level deep and adds every explicit project path.
+// A project is named after its folder; when two share a name, both become "<parent>/<folder>",
+// and if that still clashes, the full path (names key the config, tmux sessions and run dirs).
+func DiscoverProjects(baseFolders, projectPaths, excludedProjects []string) ([]Project, error) {
 	isExcluded := func(name string) bool {
 		for _, pattern := range excludedProjects {
 			if matched, _ := filepath.Match(pattern, name); matched {
@@ -20,54 +32,71 @@ func DiscoverProjects(baseFolder string, excludedProjects []string) ([]Project, 
 		}
 		return false
 	}
-	// Expand ~ to user home dir
-	if strings.HasPrefix(baseFolder, "~/") {
-		home, err := os.UserHomeDir()
-		if err == nil {
-			baseFolder = filepath.Join(home, baseFolder[2:])
-		}
-	}
-
-	var projects []Project
-
-	entries, err := os.ReadDir(baseFolder)
-	if err != nil {
-		if os.IsNotExist(err) {
-			// Base folder doesn't exist yet, return empty list
-			return projects, nil
-		}
-		return nil, err
-	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-
-		projectPath := filepath.Join(baseFolder, entry.Name())
-
-		// A naive check: consider it a project if it has a .ddev folder or composer.json
-		hasDdev := false
-		if _, err := os.Stat(filepath.Join(projectPath, ".ddev")); err == nil {
-			hasDdev = true
-		}
-
-		hasComposer := false
-		if _, err := os.Stat(filepath.Join(projectPath, "composer.json")); err == nil {
-			hasComposer = true
-		}
-
-		if hasDdev || hasComposer {
-			if isExcluded(entry.Name()) {
-				continue
+	// A naive check: consider it a project if it has a .ddev folder or composer.json
+	isProject := func(dir string) bool {
+		for _, marker := range []string{".ddev", "composer.json"} {
+			if _, err := os.Stat(filepath.Join(dir, marker)); err == nil {
+				return true
 			}
-			projects = append(projects, Project{
-				Name: entry.Name(),
-				Path: projectPath,
-			})
+		}
+		return false
+	}
+
+	var paths []string
+	seen := map[string]bool{}
+	add := func(p string) {
+		if !seen[p] {
+			seen[p] = true
+			paths = append(paths, p)
 		}
 	}
 
+	for _, base := range baseFolders {
+		base = expandHome(base)
+		entries, err := os.ReadDir(base)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue // base folder doesn't exist (yet)
+			}
+			return nil, err
+		}
+		for _, entry := range entries {
+			p := filepath.Join(base, entry.Name())
+			if entry.IsDir() && isProject(p) && !isExcluded(entry.Name()) {
+				add(p)
+			}
+		}
+	}
+	// Explicit paths are added on purpose, so no marker or exclusion check; missing ones are skipped.
+	for _, p := range projectPaths {
+		p = expandHome(p)
+		if info, err := os.Stat(p); err == nil && info.IsDir() {
+			add(p)
+		}
+	}
+
+	// Short names have no "/" and full paths start with one, so each step can only remove clashes.
+	names := make([]string, len(paths))
+	for i, p := range paths {
+		names[i] = filepath.Base(p)
+	}
+	parent := func(p string) string { return filepath.Base(filepath.Dir(p)) + "/" + filepath.Base(p) }
+	full := func(p string) string { return p }
+	for _, rename := range []func(string) string{parent, full} {
+		count := map[string]int{}
+		for _, n := range names {
+			count[n]++
+		}
+		for i, p := range paths {
+			if count[names[i]] > 1 {
+				names[i] = rename(p)
+			}
+		}
+	}
+	projects := make([]Project, len(paths))
+	for i, p := range paths {
+		projects[i] = Project{Name: names[i], Path: p}
+	}
 	return projects, nil
 }
 

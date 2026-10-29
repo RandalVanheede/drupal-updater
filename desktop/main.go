@@ -41,7 +41,7 @@ func NewApp() *App {
 	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
 		cfg = &config.Config{
-			BaseFolder:    "~/projects",
+			BaseFolders:   []string{"~/projects"},
 			MaxConcurrent: 3,
 			Projects:      make(map[string]config.ProjectConfig),
 		}
@@ -62,7 +62,7 @@ type ProjectInfo struct {
 }
 
 func (a *App) DiscoverProjects() ([]ProjectInfo, error) {
-	projects, err := discovery.DiscoverProjects(a.cfg.BaseFolder, a.cfg.ExcludedProjects)
+	projects, err := discovery.DiscoverProjects(a.cfg.BaseFolders, a.cfg.ProjectPaths, a.cfg.ExcludedProjects)
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +110,7 @@ type UpdateRequest struct {
 
 // projectPath finds a discovered project's folder by name.
 func (a *App) projectPath(name string) (string, error) {
-	projects, err := discovery.DiscoverProjects(a.cfg.BaseFolder, a.cfg.ExcludedProjects)
+	projects, err := discovery.DiscoverProjects(a.cfg.BaseFolders, a.cfg.ProjectPaths, a.cfg.ExcludedProjects)
 	if err != nil {
 		return "", err
 	}
@@ -148,7 +148,7 @@ func (a *App) StartUpdate(req UpdateRequest) {
 		ctx         context.Context
 	}
 
-	projects, err := discovery.DiscoverProjects(a.cfg.BaseFolder, a.cfg.ExcludedProjects)
+	projects, err := discovery.DiscoverProjects(a.cfg.BaseFolders, a.cfg.ProjectPaths, a.cfg.ExcludedProjects)
 	var jobs []job
 	for _, projectName := range req.Projects {
 		a.mu.Lock()
@@ -159,7 +159,7 @@ func (a *App) StartUpdate(req UpdateRequest) {
 		}
 		p, ok := discovery.Find(projects, projectName)
 		if !ok {
-			msg := fmt.Sprintf("project %s not found in %s", projectName, a.cfg.BaseFolder)
+			msg := fmt.Sprintf("project %s not found in the project folders", projectName)
 			if err != nil {
 				msg = err.Error()
 			}

@@ -7,7 +7,7 @@
   let projects = $state([]);
   let selected = $state({});
   let claudeDefaults = $state({ prompt: '', allowedTools: [] });
-  let config = $state({ BaseFolder: '', MaxConcurrent: 3, ExcludedProjects: [], Projects: {} });
+  let config = $state({ BaseFolders: [], ProjectPaths: [], MaxConcurrent: 3, ExcludedProjects: [], Projects: {} });
 
   let statuses = $state({});
   let logs = $state({});
@@ -66,7 +66,8 @@
       ClaudeTimeoutMinutes: loaded.ClaudeTimeoutMinutes || 60,
       ClaudeAllowedTools: loaded.ClaudeAllowedTools?.length ? loaded.ClaudeAllowedTools : [...claudeDefaults.allowedTools],
       ClaudePrompt: loaded.ClaudePrompt || claudeDefaults.prompt,
-      BaseFolder: loaded.BaseFolder || '',
+      BaseFolders: loaded.BaseFolders || [],
+      ProjectPaths: loaded.ProjectPaths || [],
       MaxConcurrent: loaded.MaxConcurrent || 3,
       ExcludedProjects: loaded.ExcludedProjects || [],
       Projects: loaded.Projects || {},
@@ -240,7 +241,7 @@
       </ul>
 
       {#if projects.length === 0}
-        <p class="empty">No projects found. Check your base folder in Settings.</p>
+        <p class="empty">No projects found. Check your project folders in Settings.</p>
       {/if}
 
       <div class="footer-actions">
@@ -262,9 +263,15 @@
       <h2>Configuration</h2>
 
       <div class="config-group">
-        <label>
-          Base folder
-          <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" bind:value={config.BaseFolder} />
+        <label style="flex: 1;">
+          Base folders (one per line, each scanned one level deep)
+          <textarea autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" rows="3" value={config.BaseFolders?.join('\n') || ''}
+            onchange={(e) => config.BaseFolders = e.target.value.split('\n').map(s => s.trim()).filter(Boolean)}></textarea>
+        </label>
+        <label style="flex: 1;">
+          Extra project paths (one per line, single projects outside the base folders)
+          <textarea autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" rows="3" value={config.ProjectPaths?.join('\n') || ''}
+            onchange={(e) => config.ProjectPaths = e.target.value.split('\n').map(s => s.trim()).filter(Boolean)}></textarea>
         </label>
         <label>
           Max concurrent

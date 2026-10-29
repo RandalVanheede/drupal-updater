@@ -7,7 +7,7 @@ drupal-updater/
 ├── main.go          # TUI entrypoint (`--config` opens the config editor, `api` is a hidden JSON CLI)
 ├── api/             # JSON/stdin/stdout commands used by the desktop app
 ├── config/          # YAML config loading & per-project defaults
-├── discovery/       # Auto-detects Drupal/DDEV projects in base folder
+├── discovery/       # Auto-detects Drupal/DDEV projects in the base folders
 ├── executor/        # Runs updates per project (Claude in tmux)
 ├── logging/         # File logger
 ├── ui/              # Bubbletea TUI (list, input, running views, config editor)
@@ -37,7 +37,11 @@ Semantic versioning; changes go in `CHANGELOG.md` (Keep a Changelog). Work happe
 Config file location: `~/.config/drupal-updater/config.yaml`
 
 ```yaml
-base_folder: ~/projects
+base_folders:                           # each scanned one level deep for projects
+  - ~/projects
+  - ~/clients
+project_paths:                          # single projects outside the base folders
+  - ~/work/legacy-site
 
 projects:
   my-drupal-site:
@@ -46,6 +50,8 @@ projects:
     ignored_packages:
       - drupal/some-module
 ```
+
+An old single `base_folder:` key is still read and moved into `base_folders` on the next save.
 
 ### Defaults
 
@@ -58,11 +64,11 @@ If a project has no config entry, these defaults apply:
 
 ## Auto-Detection
 
-On startup the app scans `base_folder` for subdirectories containing either:
+On startup the app scans every base folder for subdirectories containing either:
 - A `.ddev/` directory, **or**
 - A `composer.json` file
 
-Each match becomes a selectable project.
+Each match, plus every `project_paths` entry, becomes a selectable project. A project is named after its folder; when two projects share a folder name, both are shown as `<parent>/<folder>` (or the full path if that still clashes). That name is also the key under `projects:`, so settings stored under the plain folder name must be moved when a duplicate appears.
 
 ## TUI Flow
 

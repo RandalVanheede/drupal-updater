@@ -16,7 +16,9 @@ type ProjectConfig struct {
 }
 
 type Config struct {
-	BaseFolder           string                   `yaml:"base_folder" json:"BaseFolder"`
+	BaseFolders          []string                 `yaml:"base_folders" json:"BaseFolders"`             // scanned one level deep for projects
+	ProjectPaths         []string                 `yaml:"project_paths,omitempty" json:"ProjectPaths"` // single projects outside the base folders
+	LegacyBaseFolder     string                   `yaml:"base_folder,omitempty" json:"-"`              // old single-folder key, moved into BaseFolders on load
 	MaxConcurrent        int                      `yaml:"max_concurrent" json:"MaxConcurrent"`
 	UpdateMode           string                   `yaml:"update_mode,omitempty" json:"UpdateMode"`     // "standard" (default, all minor/patch updates) or "disaster" (security fixes only)
 	ClaudeModel          string                   `yaml:"claude_model,omitempty" json:"ClaudeModel"`   // default sonnet
@@ -82,7 +84,7 @@ func LoadConfig(path string) (*Config, error) {
 		if os.IsNotExist(err) {
 			// Return default config if file doesn't exist
 			return &Config{
-				BaseFolder:    "~/projects",
+				BaseFolders:   []string{"~/projects"},
 				MaxConcurrent: 3,
 				Projects:      make(map[string]ProjectConfig),
 			}, nil
@@ -96,8 +98,12 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 
-	if cfg.BaseFolder == "" {
-		cfg.BaseFolder = "~/projects"
+	if cfg.LegacyBaseFolder != "" {
+		cfg.BaseFolders = append([]string{cfg.LegacyBaseFolder}, cfg.BaseFolders...)
+		cfg.LegacyBaseFolder = ""
+	}
+	if len(cfg.BaseFolders) == 0 && len(cfg.ProjectPaths) == 0 {
+		cfg.BaseFolders = []string{"~/projects"}
 	}
 
 	if cfg.MaxConcurrent <= 0 {

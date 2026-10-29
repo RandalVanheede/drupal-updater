@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"drupal-updater/api"
 	"drupal-updater/config"
@@ -70,7 +71,7 @@ func main() {
 
 	executor.Configure(cfg)
 
-	projects, err := discovery.DiscoverProjects(cfg.BaseFolder, cfg.ExcludedProjects)
+	projects, err := discovery.DiscoverProjects(cfg.BaseFolders, cfg.ProjectPaths, cfg.ExcludedProjects)
 	if err != nil {
 		logging.Error("Error discovering projects: %v", err)
 		fmt.Fprintf(os.Stderr, "Error discovering projects: %v\n", err)
@@ -78,13 +79,13 @@ func main() {
 	}
 
 	if len(projects) == 0 {
-		logging.Info("No projects found in %s", cfg.BaseFolder)
-		fmt.Printf("No Drupal/DDEV projects found in %s\n", cfg.BaseFolder)
-		fmt.Println("Run with --config to configure your base folder and projects.")
+		logging.Info("No projects found in %v %v", cfg.BaseFolders, cfg.ProjectPaths)
+		fmt.Printf("No Drupal/DDEV projects found in %s\n", strings.Join(append(cfg.BaseFolders, cfg.ProjectPaths...), ", "))
+		fmt.Println("Run with --config to configure your project folders.")
 		os.Exit(0)
 	}
 
-	logging.Info("Found %d projects in %s", len(projects), cfg.BaseFolder)
+	logging.Info("Found %d projects", len(projects))
 
 	m := ui.New(cfg, projects)
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())

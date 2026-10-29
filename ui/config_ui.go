@@ -15,11 +15,12 @@ import (
 // Config sub-states
 const (
 	ConfigMenu = iota
-	ConfigEditBaseFolder
+	ConfigEditBaseFolders
 	ConfigEditMaxConcurrent
 	ConfigProjectList
 	ConfigProjectEdit
 	ConfigProjectEditField
+	ConfigEditProjectPaths
 )
 
 type configModel struct {
@@ -82,9 +83,13 @@ func (cm *configModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch cm.state {
 	case ConfigMenu:
 		return cm.updateMenu(msg)
-	case ConfigEditBaseFolder:
+	case ConfigEditBaseFolders:
 		return cm.updateEditField(msg, func(val string) {
-			cm.cfg.BaseFolder = val
+			cm.cfg.BaseFolders = splitList(val)
+		})
+	case ConfigEditProjectPaths:
+		return cm.updateEditField(msg, func(val string) {
+			cm.cfg.ProjectPaths = splitList(val)
 		})
 	case ConfigEditMaxConcurrent:
 		return cm.updateEditField(msg, func(val string) {
@@ -125,23 +130,27 @@ func (cm *configModel) updateMenu(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cm.cursor--
 			}
 		case "down", "j":
-			if cm.cursor < 3 {
+			if cm.cursor < 4 {
 				cm.cursor++
 			}
 		case "enter":
 			switch cm.cursor {
-			case 0: // Edit base folder
-				cm.input.SetValue(cm.cfg.BaseFolder)
+			case 0: // Edit base folders
+				cm.input.SetValue(strings.Join(cm.cfg.BaseFolders, ", "))
 				cm.input.CursorEnd()
-				cm.state = ConfigEditBaseFolder
-			case 1: // Edit max concurrent
+				cm.state = ConfigEditBaseFolders
+			case 1: // Edit extra project paths
+				cm.input.SetValue(strings.Join(cm.cfg.ProjectPaths, ", "))
+				cm.input.CursorEnd()
+				cm.state = ConfigEditProjectPaths
+			case 2: // Edit max concurrent
 				cm.input.SetValue(strconv.Itoa(cm.cfg.MaxConcurrent))
 				cm.input.CursorEnd()
 				cm.state = ConfigEditMaxConcurrent
-			case 2: // Manage projects
+			case 3: // Manage projects
 				cm.state = ConfigProjectList
 				cm.projectCursor = 0
-			case 3: // Save & exit
+			case 4: // Save & exit
 				err := config.SaveConfig(cm.configPath, cm.cfg)
 				if err != nil {
 					cm.message = "Error: " + err.Error()
@@ -323,7 +332,8 @@ func (cm *configModel) View() string {
 	switch cm.state {
 	case ConfigMenu:
 		items := []string{
-			fmt.Sprintf("Base folder: %s", lipgloss.NewStyle().Foreground(dimWhite).Render(cm.cfg.BaseFolder)),
+			fmt.Sprintf("Base folders: %s", lipgloss.NewStyle().Foreground(dimWhite).Render(strings.Join(cm.cfg.BaseFolders, ", "))),
+			fmt.Sprintf("Extra project paths: %s", lipgloss.NewStyle().Foreground(dimWhite).Render(strings.Join(cm.cfg.ProjectPaths, ", "))),
 			fmt.Sprintf("Max concurrent: %s", lipgloss.NewStyle().Foreground(dimWhite).Render(strconv.Itoa(cm.cfg.MaxConcurrent))),
 			fmt.Sprintf("Manage projects (%d configured)", len(cm.cfg.Projects)),
 			"Save & exit",
@@ -368,8 +378,14 @@ func (cm *configModel) View() string {
 		s.WriteString("\n  " + helpKey("enter", "edit") + "  " + helpKey("esc", "back"))
 		s.WriteString("\n")
 
-	case ConfigEditBaseFolder:
-		s.WriteString(subtitleStyle.Render("  Base folder:") + "\n\n")
+	case ConfigEditBaseFolders:
+		s.WriteString(subtitleStyle.Render("  Base folders (comma-separated, each scanned one level deep):") + "\n\n")
+		s.WriteString("  " + cm.input.View() + "\n\n")
+		s.WriteString("  " + helpKey("enter", "save") + "  " + helpKey("esc", "cancel"))
+		s.WriteString("\n")
+
+	case ConfigEditProjectPaths:
+		s.WriteString(subtitleStyle.Render("  Extra project paths (comma-separated, single projects outside the base folders):") + "\n\n")
 		s.WriteString("  " + cm.input.View() + "\n\n")
 		s.WriteString("  " + helpKey("enter", "save") + "  " + helpKey("esc", "cancel"))
 		s.WriteString("\n")

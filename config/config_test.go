@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -22,7 +23,7 @@ func TestMergeWithDefaults(t *testing.T) {
 
 func TestSaveLoadRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sub", "config.yaml")
-	in := &Config{BaseFolder: "/srv", MaxConcurrent: 2, Projects: map[string]ProjectConfig{"a": {GitStartBranch: "main"}}}
+	in := &Config{BaseFolders: []string{"/srv", "/www"}, ProjectPaths: []string{"/opt/site"}, MaxConcurrent: 2, Projects: map[string]ProjectConfig{"a": {GitStartBranch: "main"}}}
 	if err := SaveConfig(path, in); err != nil {
 		t.Fatal(err)
 	}
@@ -30,23 +31,23 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.BaseFolder != "/srv" || out.MaxConcurrent != 2 || out.Projects["a"].GitStartBranch != "main" {
+	if !reflect.DeepEqual(out.BaseFolders, in.BaseFolders) || !reflect.DeepEqual(out.ProjectPaths, in.ProjectPaths) || out.MaxConcurrent != 2 || out.Projects["a"].GitStartBranch != "main" {
 		t.Fatalf("round trip mismatch: %+v", out)
 	}
 }
 
-func TestLoadIgnoresRemovedKeys(t *testing.T) {
+func TestLoadLegacyBaseFolder(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	os.WriteFile(path, []byte("base_folder: /srv\nmode: classic\ndefault_commands: [ls]\n"), 0o644)
 	cfg, err := LoadConfig(path)
-	if err != nil || cfg.BaseFolder != "/srv" {
+	if err != nil || !reflect.DeepEqual(cfg.BaseFolders, []string{"/srv"}) || cfg.LegacyBaseFolder != "" {
 		t.Fatalf("got %+v, %v", cfg, err)
 	}
 }
 
 func TestLoadMissingConfig(t *testing.T) {
 	cfg, err := LoadConfig(filepath.Join(t.TempDir(), "none.yaml"))
-	if err != nil || cfg.BaseFolder != "~/projects" || cfg.MaxConcurrent != 3 {
+	if err != nil || !reflect.DeepEqual(cfg.BaseFolders, []string{"~/projects"}) || cfg.MaxConcurrent != 3 {
 		t.Fatalf("got %+v, %v", cfg, err)
 	}
 }

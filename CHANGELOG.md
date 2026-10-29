@@ -6,6 +6,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+- Multiple project folders: `base_folders` (each scanned one level deep) and `project_paths` (single projects anywhere). The old `base_folder` key is migrated. Projects with the same folder name are shown as `<parent>/<folder>`.
+
 ### Removed
 - Classic mode (shell commands with retries and auto-healing). Claude is the only runner; the `mode`, `commands`, `default_commands`, `max_attempts` and `command_timeout_minutes` settings and the `{{commands}}` prompt placeholder are gone (old keys are ignored).
 
