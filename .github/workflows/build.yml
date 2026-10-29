@@ -13,8 +13,8 @@ jobs:
   test:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - run: go vet ./... && go test ./...
@@ -24,11 +24,11 @@ jobs:
     needs: test
     runs-on: macos-14 # arm64; the DMG bundles Homebrew's arm64 tmux
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - run: brew install tmux
@@ -39,7 +39,7 @@ jobs:
           GOARCH=arm64 go build -o dist/drupal-updater-darwin-arm64 .
           GOARCH=amd64 go build -o dist/drupal-updater-darwin-amd64 .
           mv desktop/build/bin/Drupal-Updater.dmg "dist/Drupal-Updater-${GITHUB_REF_NAME}-macos-arm64.dmg"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: macos
           path: dist/*
@@ -52,17 +52,17 @@ jobs:
         runner: [ubuntu-24.04, ubuntu-24.04-arm] # wails can't cross-compile, so one native runner per CPU
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config
       - run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
       - run: scripts/build-linux.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux-${{ matrix.runner }}
           path: desktop/build/bin/*.tar.gz
@@ -73,8 +73,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
