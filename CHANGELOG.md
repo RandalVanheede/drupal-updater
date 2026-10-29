@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-10-29
+
 ### Added
 - Multiple project folders: `base_folders` (each scanned one level deep) and `project_paths` (single projects anywhere). The old `base_folder` key is migrated. Projects with the same folder name are shown as `<parent>/<folder>`.
 
@@ -36,6 +38,7 @@ First versioned release.
 - Classic mode: the configured shell commands with retries and auto-healing, no Claude.
 - Build scripts for macOS (`scripts/build-dmg.sh`) and Linux amd64/arm64 (`scripts/build-linux.sh`, `scripts/build-linux-docker.sh`), and a CI pipeline that builds them for each release tag.
 
-[Unreleased]: https://github.com/RandalVanheede/drupal-updater/compare/v1.0.1...1.0.x
+[Unreleased]: https://github.com/RandalVanheede/drupal-updater/compare/v1.0.2...1.0.x
+[1.0.2]: https://github.com/RandalVanheede/drupal-updater/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/RandalVanheede/drupal-updater/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/RandalVanheede/drupal-updater/releases/tag/v1.0.0
