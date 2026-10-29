@@ -219,16 +219,14 @@ func cmdStartUpdate(args []string) {
 		path        string
 		startBranch string
 		tempBranch  string
-		commands    []string
 	}
 
 	var jobs []job
 	for _, p := range selectedProjects {
 		pCfg := cfg.Projects[p.Name]
-		pCfg.MergeWithDefaults(cfg)
+		pCfg.MergeWithDefaults()
 
 		tempBranch := executor.TempBranch(p.Name)
-		commands := executor.BuildCommands(pCfg.Commands, pCfg.GitStartBranch, tempBranch)
 
 		logging.Info("[api] Queuing project %s, temp branch: %s", p.Name, tempBranch)
 		jobs = append(jobs, job{
@@ -236,7 +234,6 @@ func cmdStartUpdate(args []string) {
 			path:        p.Path,
 			startBranch: pCfg.GitStartBranch,
 			tempBranch:  tempBranch,
-			commands:    commands,
 		})
 	}
 
@@ -256,7 +253,7 @@ func cmdStartUpdate(args []string) {
 		go func() {
 			defer wg.Done()
 			sem <- struct{}{}
-			executor.Run(ctx, j.name, j.path, j.startBranch, j.tempBranch, j.commands, outChan)
+			executor.Run(ctx, j.name, j.path, j.startBranch, j.tempBranch, outChan)
 			<-sem
 		}()
 	}
@@ -335,7 +332,7 @@ func cmdCleanupBranch(args []string) {
 	}
 
 	pCfg := cfg.Projects[projectName]
-	pCfg.MergeWithDefaults(cfg)
+	pCfg.MergeWithDefaults()
 
 	tempBranch := executor.TempBranch(projectName)
 

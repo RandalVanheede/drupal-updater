@@ -3,42 +3,16 @@ package executor
 import (
 	"context"
 	"os"
-	"reflect"
-	"strings"
+	"os/exec"
 	"testing"
-	"time"
 )
 
-func TestBuildCommands(t *testing.T) {
-	got := BuildCommands([]string{"git pull --rebase", "ddev start"}, "main", "tmp")
-	want := []string{"git checkout main", "git pull --rebase", "git checkout -B tmp", "ddev start"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("got %v", got)
-	}
-}
-
-func TestHeal(t *testing.T) {
-	cases := []struct {
-		out   string
-		fix   string
-		retry bool
-	}{
-		{"error: Your local changes to the following files would be overwritten by checkout", stashCmd, true},
-		// messages taken from ~/.config/drupal-updater/updater.log
-		{"error: Your local changes to the following files would be overwritten by checkout:\n\t.gitignore\nPlease commit your changes or stash them before you switch branches.", stashCmd, true},
-		{"error: cannot pull with rebase: Your index contains uncommitted changes.", stashCmd, true},
-		{"There is no tracking information for the current branch.\nPlease specify which branch you want to rebase against.", upstreamFixCmd, true},
-		{"Failed to start baru: failed to update router network aliases: failed to disconnect container 29df from network ddev_default: Error response from daemon: container 29df is not connected to network ddev_default", "", true},
-		{"unable to start project x because the configured database type does not match", "", false},
-		{"- Required package \"a/b\" is not present in the lock file.", "", false},
-		{"curl error 6: Could not resolve host: repo.packagist.org", "", true},
-		{"fatal: pathspec 'x' did not match", "", false},
-	}
-	for _, c := range cases {
-		if fix, retry := heal(c.out); fix != c.fix || retry != c.retry {
-			t.Errorf("%q: got (%q,%v)", c.out, fix, retry)
-		}
-	}
+// shellCmd runs a shell snippet for test setup.
+func shellCmd(_ context.Context, c, dir string) (string, error) {
+	cmd := exec.Command("sh", "-c", c)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	return string(out), err
 }
 
 func TestCleanupDirtyTree(t *testing.T) {
@@ -91,22 +65,6 @@ func TestResolveStartBranch(t *testing.T) {
 	}
 	if got := ResolveStartBranch(dir, "main"); got != "main" {
 		t.Errorf("got %q", got)
-	}
-}
-
-func TestPruneStashes(t *testing.T) {
-	dir := gitRepo(t, "echo x > f && git add f && git commit -qm f && echo y > f && git stash push -q -m "+stashMsg+" && echo z > f && git stash push -q -m mine")
-	PruneStashes(dir) // fresh: nothing dropped
-	if out, _ := shellCmd(context.Background(), "git stash list | wc -l", dir); strings.TrimSpace(out) != "2" {
-		t.Fatalf("fresh stashes dropped: %q", out)
-	}
-	old := time.Now().Add(-stashMaxAge - time.Hour).Format(time.RFC3339)
-	// backdate every stash entry by rewriting reflog timestamps is brittle; use GIT_COMMITTER_DATE on a new stash instead
-	shellCmd(context.Background(), "echo w > f && GIT_COMMITTER_DATE="+old+" git stash push -q -m "+stashMsg, dir)
-	PruneStashes(dir)
-	out, _ := shellCmd(context.Background(), "git stash list", dir)
-	if strings.Count(out, "\n") != 2 || !strings.Contains(out, "mine") {
-		t.Fatalf("got %q", out)
 	}
 }
 

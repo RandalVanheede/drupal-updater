@@ -5,7 +5,6 @@ export namespace config {
 	    GitNewBranchPattern: string;
 	    IgnoredPackages: string[];
 	    SmokePaths: string[];
-	    Commands: string[];
 	    ClaudeInstructions: string;
 	
 	    static createFrom(source: any = {}) {
@@ -18,23 +17,18 @@ export namespace config {
 	        this.GitNewBranchPattern = source["GitNewBranchPattern"];
 	        this.IgnoredPackages = source["IgnoredPackages"];
 	        this.SmokePaths = source["SmokePaths"];
-	        this.Commands = source["Commands"];
 	        this.ClaudeInstructions = source["ClaudeInstructions"];
 	    }
 	}
 	export class Config {
 	    BaseFolder: string;
 	    MaxConcurrent: number;
-	    Mode: string;
 	    UpdateMode: string;
 	    ClaudeModel: string;
 	    ClaudePrompt: string;
 	    ClaudeAllowedTools: string[];
 	    ClaudePermissionMode: string;
 	    ClaudeTimeoutMinutes: number;
-	    MaxAttempts: number;
-	    CommandTimeoutMinutes: number;
-	    DefaultCommands: string[];
 	    ExcludedProjects: string[];
 	    Projects: Record<string, ProjectConfig>;
 	
@@ -46,16 +40,12 @@ export namespace config {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.BaseFolder = source["BaseFolder"];
 	        this.MaxConcurrent = source["MaxConcurrent"];
-	        this.Mode = source["Mode"];
 	        this.UpdateMode = source["UpdateMode"];
 	        this.ClaudeModel = source["ClaudeModel"];
 	        this.ClaudePrompt = source["ClaudePrompt"];
 	        this.ClaudeAllowedTools = source["ClaudeAllowedTools"];
 	        this.ClaudePermissionMode = source["ClaudePermissionMode"];
 	        this.ClaudeTimeoutMinutes = source["ClaudeTimeoutMinutes"];
-	        this.MaxAttempts = source["MaxAttempts"];
-	        this.CommandTimeoutMinutes = source["CommandTimeoutMinutes"];
-	        this.DefaultCommands = source["DefaultCommands"];
 	        this.ExcludedProjects = source["ExcludedProjects"];
 	        this.Projects = this.convertValues(source["Projects"], ProjectConfig, true);
 	    }

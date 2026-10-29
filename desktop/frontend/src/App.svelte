@@ -59,8 +59,7 @@
     const loaded = await GetConfig();
     claudeDefaults = await GetClaudeDefaults();
     config = {
-      ...loaded, // keep keys this screen doesn't edit (max_attempts etc.)
-      Mode: loaded.Mode || 'claude',
+      ...loaded, // keep keys this screen doesn't edit
       UpdateMode: loaded.UpdateMode || 'standard',
       ClaudeModel: loaded.ClaudeModel || 'sonnet',
       ClaudePermissionMode: loaded.ClaudePermissionMode || 'dontAsk',
@@ -69,7 +68,6 @@
       ClaudePrompt: loaded.ClaudePrompt || claudeDefaults.prompt,
       BaseFolder: loaded.BaseFolder || '',
       MaxConcurrent: loaded.MaxConcurrent || 3,
-      DefaultCommands: loaded.DefaultCommands || [],
       ExcludedProjects: loaded.ExcludedProjects || [],
       Projects: loaded.Projects || {},
     };
@@ -150,18 +148,6 @@
         GitNewBranchPattern: 'hotfix/*',
         IgnoredPackages: [],
         SmokePaths: [],
-        Commands: config.DefaultCommands && config.DefaultCommands.length > 0
-          ? [...config.DefaultCommands]
-          : [
-            'git pull --rebase --autostash',
-            'ddev describe >/dev/null 2>&1 || ddev start',
-            'ddev composer install',
-            'ddev drush deploy -y',
-            "ddev composer update 'drupal/core-*' 'symfony/*' 'twig/*' --with-all-dependencies",
-            'ddev drush updb -y',
-            'ddev drush cex -y',
-            'ddev stop',
-          ],
       };
       newProjectName = '';
     }
@@ -258,7 +244,6 @@
       {/if}
 
       <div class="footer-actions">
-        {#if config.Mode !== 'classic'}
         <label class="update-mode">
           Mode
           <select bind:value={config.UpdateMode} onchange={() => SetUpdateMode(config.UpdateMode)}>
@@ -266,7 +251,6 @@
             <option value="disaster">Disaster (security fixes only)</option>
           </select>
         </label>
-        {/if}
         <button class="btn-primary" onclick={startUpdate} disabled={!projects.some(p => selected[p.name])}>
           Update Selected
         </button>
@@ -296,25 +280,8 @@
         </label>
       </div>
 
-      {#if config.Mode === 'classic'}
-      <div class="config-group" style="margin-top: 12px;">
-        <label style="flex: 1;">
-          Default commands (one per line)
-          <textarea autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" rows="8" value={config.DefaultCommands?.join('\n') || ''}
-            onchange={(e) => config.DefaultCommands = e.target.value.split('\n').filter(Boolean)}></textarea>
-        </label>
-      </div>
-      {/if}
-
       <h3>Claude</h3>
       <div class="config-group">
-        <label>
-          Mode
-          <select bind:value={config.Mode}>
-            <option value="claude">claude (tmux session per project)</option>
-            <option value="classic">classic (shell commands + auto-heal)</option>
-          </select>
-        </label>
         <label>
           Model
           <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" bind:value={config.ClaudeModel} />
@@ -382,18 +349,10 @@
                   <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" value={config.Projects[name].SmokePaths?.join(', ') || ''}
                     onchange={(e) => config.Projects[name].SmokePaths = e.target.value.split(',').map(s => s.trim()).filter(Boolean)} />
                 </label>
-                {#if config.Mode === 'classic'}
-                <label>
-                  Commands (one per line)
-                  <textarea autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" rows="6" value={config.Projects[name].Commands?.join('\n') || ''}
-                    onchange={(e) => config.Projects[name].Commands = e.target.value.split('\n').filter(Boolean)}></textarea>
-                </label>
-                {:else}
                 <label>
                   Extra instructions for Claude (added to the prompt)
                   <textarea autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" rows="5" bind:value={config.Projects[name].ClaudeInstructions}></textarea>
                 </label>
-                {/if}
               </div>
             {/if}
           </div>

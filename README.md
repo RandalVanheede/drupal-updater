@@ -8,7 +8,7 @@ drupal-updater/
 ├── api/             # JSON/stdin/stdout commands used by the desktop app
 ├── config/          # YAML config loading & per-project defaults
 ├── discovery/       # Auto-detects Drupal/DDEV projects in base folder
-├── executor/        # Runs updates per project (classic shell mode or Claude in tmux)
+├── executor/        # Runs updates per project (Claude in tmux)
 ├── logging/         # File logger
 ├── ui/              # Bubbletea TUI (list, input, running views, config editor)
 ├── desktop/         # Wails desktop app (Go bindings in main.go, Svelte frontend)
@@ -42,29 +42,19 @@ base_folder: ~/projects
 projects:
   my-drupal-site:
     git_start_branch: main              # default: master
-    git_new_branch_pattern: "hotfix/*"  # * is replaced with user input
+    git_new_branch_pattern: "hotfix/*"  # * = project slug
     ignored_packages:
       - drupal/some-module
-    commands:                           # override the default command flow
-      - git pull --rebase --autostash
-      - ddev start
-      - ddev composer install
-      - ddev drush deploy -y
-      - ddev composer update 'drupal/core-*' --with-all-dependencies
-      - ddev drush updb -y
-      - ddev drush cex -y
-      - ddev stop
 ```
 
 ### Defaults
 
 If a project has no config entry, these defaults apply:
 
-| Setting                | Default                                                                                     |
-|------------------------|---------------------------------------------------------------------------------------------|
-| `git_start_branch`     | `master`                                                                                    |
-| `git_new_branch_pattern` | `hotfix/*`                                                                                |
-| `commands`             | `git pull`, `ddev start`, `ddev composer install`, `ddev drush deploy -y`, `ddev composer update 'drupal/core-*' 'symfony/*' 'twig/*' --with-all-dependencies`, `ddev drush updb -y`, `ddev drush cex -y` |
+| Setting                  | Default     |
+|--------------------------|-------------|
+| `git_start_branch`       | `master`    |
+| `git_new_branch_pattern` | `hotfix/*`  |
 
 ## Auto-Detection
 
@@ -72,47 +62,25 @@ On startup the app scans `base_folder` for subdirectories containing either:
 - A `.ddev/` directory, **or**
 - A `composer.json` file
 
-Each match becomes a selectable project in the TUI.
+Each match becomes a selectable project.
 
 ## TUI Flow
 
 1. **List View** — Scrollable list of detected projects with checkboxes. Toggle individual projects with `space`/`enter`, toggle all with `a`, start update with `u`.
-2. **Input View** — If any selected project's branch pattern contains `*`, the user is prompted to type a variable (e.g. ticket number). Press `enter` to confirm or `esc` to go back.
-3. **Running View** — Shows live status per project:
-   - `IDLE` (grey) — not started
-   - `RUNNING` (yellow) — commands in progress, shows current command
-   - `SUCCESS` (green) — all commands completed
-   - `FAILED` (red) — a command exited non-zero, shows error output
+2. **Running View** — Shows live status per project (`IDLE`, `RUNNING`, `SUCCESS`, `FAILED`) and the live Claude session.
+3. **Confirm View** — Rename each successful temp branch to its final name, or clean up.
 
-## Execution Engine
-
-- Each selected project runs in its own **goroutine**.
-- Commands execute sequentially via `sh -c` (supports quotes, globs, pipes).
-- Before the user's command list, the engine prepends:
-  1. `git checkout <start_branch>`
-  2. `git pull --rebase --autostash`
-  3. `git checkout -b <new_branch>` (if branch variable was provided)
-- On any non-zero exit code the project is marked **FAILED** and remaining commands are aborted.
-- stdout/stderr are captured and shown in the TUI for debugging.
-
-## Error Handling
-
-- **Exit code != 0** → failure. The project turns red. The user must fix it manually.
-- Remaining commands for that project are **aborted** (not continued).
-- Other projects continue independently.
-
-## Claude mode (default)
+## Claude runner
 
 Each project's update runs in a detached tmux session (`du-<project>`) with `claude --model sonnet`.
 The app only starts the session, waits for `~/.config/drupal-updater/runs/<project>/out/result.json`, verifies the
 repo is on the temp branch, and cleans up on failure. Attach with `tmux -L drupal-updater attach -t du-<project>` (private tmux socket; tmux is bundled in the .app by `scripts/bundle-tmux.sh`).
 
 ```yaml
-mode: claude                    # or "classic" (shell commands + auto-heal in Go)
 update_mode: standard           # or "disaster"; toggle on the project screen (desktop) or with `m` (TUI)
 claude_model: sonnet            # always passed via --model
 claude_prompt: "..."            # template; default is executor.DefaultClaudePrompt
-                                # placeholders: {{project}} {{path}} {{start_branch}} {{temp_branch}} {{ignored_packages}} {{smoke_paths}} {{project_instructions}} {{updates}} {{commands}} {{result_file}}
+                                # placeholders: {{project}} {{path}} {{start_branch}} {{temp_branch}} {{ignored_packages}} {{smoke_paths}} {{project_instructions}} {{updates}} {{result_file}}
 claude_allowed_tools: []        # default: all tools (Read Grep Glob Edit Write Bash WebFetch WebSearch)
 claude_permission_mode: dontAsk # unlisted tools are denied, never prompt
 claude_timeout_minutes: 60
@@ -121,7 +89,7 @@ claude_timeout_minutes: 60
 The default prompt updates core/symfony/twig within their constraints, then fixes every security advisory `composer audit` reports (Drupal core, contrib and other packages) that needs no major upgrade: core may move to a newer minor (10.3 → 10.5) but never a new major, other packages stay on their installed major. Skipped advisories are listed with their reason in the result summary.
 That is `update_mode: disaster`. The default, `update_mode: standard`, runs a plain `composer update --with-all-dependencies` within the existing constraints and pins back any package that jumped a major (loose constraints such as `*`), so only minor and patch updates land.
 
-On success the result also lists the production packages that changed in `composer.lock`, as a Markdown table like `composer-lock-diff --no-links --only-prod --md` (built in, no PHP needed on the host; classic mode too).
+On success the result also lists the production packages that changed in `composer.lock`, as a Markdown table like `composer-lock-diff --no-links --only-prod --md` (built in, no PHP needed on the host).
 
 Around the update the agent smoke-tests the site: once before updating (baseline) and once after `cex`, with the same checks: Drupal bootstraps, anonymous pages (`/`, `/user/login`, newest node per content type, search, a 404) and admin pages (content, structure, config, node add forms, status report) return 200 without PHP errors, no new Error-level log entries, no pending config. Only checks that passed before and fail after count as regressions; the agent fixes them or rolls back the causing package, and fails the run if one remains. Add project-specific paths per project:
 

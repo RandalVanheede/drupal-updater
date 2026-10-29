@@ -1,30 +1,22 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 )
 
 func TestMergeWithDefaults(t *testing.T) {
-	global := &Config{DefaultCommands: []string{"global"}}
-
 	pc := ProjectConfig{}
-	pc.MergeWithDefaults(global)
-	if pc.GitStartBranch != "master" || pc.GitNewBranchPattern != "hotfix/*" || !reflect.DeepEqual(pc.Commands, []string{"global"}) {
+	pc.MergeWithDefaults()
+	if pc.GitStartBranch != "master" || pc.GitNewBranchPattern != "hotfix/*" {
 		t.Fatalf("defaults not applied: %+v", pc)
 	}
 
-	pc = ProjectConfig{GitStartBranch: "main", Commands: []string{"own"}}
-	pc.MergeWithDefaults(global)
-	if pc.GitStartBranch != "main" || !reflect.DeepEqual(pc.Commands, []string{"own"}) {
+	pc = ProjectConfig{GitStartBranch: "main", GitNewBranchPattern: "feature/*"}
+	pc.MergeWithDefaults()
+	if pc.GitStartBranch != "main" || pc.GitNewBranchPattern != "feature/*" {
 		t.Fatalf("overrides lost: %+v", pc)
-	}
-
-	pc = ProjectConfig{}
-	pc.MergeWithDefaults(&Config{})
-	if !reflect.DeepEqual(pc.Commands, DefaultProjectConfig().Commands) {
-		t.Fatalf("built-in commands not used: %+v", pc.Commands)
 	}
 }
 
@@ -38,8 +30,17 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.BaseFolder != "/srv" || out.MaxConcurrent != 2 || out.Projects["a"].GitStartBranch != "main" || len(out.DefaultCommands) == 0 {
+	if out.BaseFolder != "/srv" || out.MaxConcurrent != 2 || out.Projects["a"].GitStartBranch != "main" {
 		t.Fatalf("round trip mismatch: %+v", out)
+	}
+}
+
+func TestLoadIgnoresRemovedKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	os.WriteFile(path, []byte("base_folder: /srv\nmode: classic\ndefault_commands: [ls]\n"), 0o644)
+	cfg, err := LoadConfig(path)
+	if err != nil || cfg.BaseFolder != "/srv" {
+		t.Fatalf("got %+v, %v", cfg, err)
 	}
 }
 

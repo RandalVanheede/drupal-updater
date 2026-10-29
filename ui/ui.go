@@ -579,21 +579,18 @@ func (m *model) retryFailed() tea.Cmd {
 		}
 
 		pCfg := m.cfg.Projects[pName]
-		pCfg.MergeWithDefaults(m.cfg)
+		pCfg.MergeWithDefaults()
 
 		tempBranch := m.tempBranches[pName]
 		startBranch := pCfg.GitStartBranch
 
-		commands := executor.BuildCommands(pCfg.Commands, startBranch, tempBranch)
-
 		ctx, cancel := context.WithCancel(parentCtx)
 		m.cancels[pName] = cancel
 		pName := pName
-		cmds := commands
 		path := p.Path
 		go func() {
 			sem <- struct{}{}
-			executor.Run(ctx, pName, path, startBranch, tempBranch, cmds, m.msgChan)
+			executor.Run(ctx, pName, path, startBranch, tempBranch, m.msgChan)
 			<-sem
 		}()
 	}
@@ -614,7 +611,7 @@ func (m *model) runConfirmation(doRenames bool) {
 			continue
 		}
 		pCfg := m.cfg.Projects[pName]
-		pCfg.MergeWithDefaults(m.cfg)
+		pCfg.MergeWithDefaults()
 
 		tempBranch := m.tempBranches[pName]
 		st := m.status[pName]
@@ -719,7 +716,6 @@ func (m *model) startExecution() {
 		path        string
 		startBranch string
 		tempBranch  string
-		commands    []string
 	}
 
 	var jobs []job
@@ -730,7 +726,7 @@ func (m *model) startExecution() {
 		m.totalJobs++
 
 		pCfg := m.cfg.Projects[p.Name]
-		pCfg.MergeWithDefaults(m.cfg)
+		pCfg.MergeWithDefaults()
 
 		// Build temp branch name
 		sanitized := executor.BranchSlug(p.Name)
@@ -743,9 +739,7 @@ func (m *model) startExecution() {
 
 		logging.Info("[%s] temp branch: %s, final branch: %s", p.Name, tempBranch, finalBranch)
 
-		commands := executor.BuildCommands(pCfg.Commands, pCfg.GitStartBranch, tempBranch)
-
-		jobs = append(jobs, job{name: p.Name, path: p.Path, startBranch: pCfg.GitStartBranch, tempBranch: tempBranch, commands: commands})
+		jobs = append(jobs, job{name: p.Name, path: p.Path, startBranch: pCfg.GitStartBranch, tempBranch: tempBranch})
 	}
 
 	sem := make(chan struct{}, m.cfg.MaxConcurrent)
@@ -755,7 +749,7 @@ func (m *model) startExecution() {
 		m.cancels[j.name] = cancel
 		go func() {
 			sem <- struct{}{}
-			executor.Run(ctx, j.name, j.path, j.startBranch, j.tempBranch, j.commands, m.msgChan)
+			executor.Run(ctx, j.name, j.path, j.startBranch, j.tempBranch, m.msgChan)
 			<-sem
 		}()
 	}

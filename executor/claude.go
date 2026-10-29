@@ -24,7 +24,7 @@ const (
 
 // DefaultClaudePrompt is used when claude_prompt is not set in the config.
 // Placeholders: {{project}} {{path}} {{start_branch}} {{temp_branch}} {{ignored_packages}} {{smoke_paths}}
-// {{project_instructions}} {{result_file}} {{updates}} (the update_mode rules for step 8) and {{commands}} (the classic command list).
+// {{project_instructions}} {{result_file}} and {{updates}} (the update_mode rules for step 8).
 const DefaultClaudePrompt = `You are updating the Drupal project "{{project}}" located at {{path}} (your working directory). Work fully autonomously: nobody is watching, so never ask questions.
 
 Branches:
@@ -65,7 +65,7 @@ Solve simple problems yourself and retry, for example:
 - local changes blocking checkout/pull: git stash push -u -m drupal-updater-autostash, then retry
 - branch has no upstream: set it with --set-upstream-to
 - temp branch already exists, wrong default branch name, ddev router/network race, transient network errors: retry (up to 3 times)
-- autostash pop conflict on a local-only config file (e.g. .ddev/*): keep the upstream version (git checkout -- <file>) and continue, but never drop that stash: it holds the user's own local edits (the app prunes old drupal-updater stashes itself). Mention the stash in the summary.
+- autostash pop conflict on a local-only config file (e.g. .ddev/*): keep the upstream version (git checkout -- <file>) and continue, but never drop that stash: it holds the user's own local edits. Mention the stash in the summary.
 - ddev refuses to start because the existing database type/version differs from .ddev/config.yaml (e.g. the volume holds mysql:8.0, config says mariadb:10.11): convert the data to the configured type. ddev utility migrate-database needs the config to match the current volume first, so: ddev config --database=<volume type:version>, then ddev utility migrate-database <configured type:version> (it keeps the data and writes the configured type back). Afterwards make sure .ddev/config.yaml equals the upstream version again (git diff .ddev/config.yaml). Never reset or delete the database.
 - ddev refuses to start because upstream renamed the project (name in .ddev/config.yaml differs from the one registered for this directory): ddev stop --unlist <old-name>, then ddev start. Then check the site boots (ddev drush status). If the database is missing or empty afterwards, try to restore one yourself: ddev snapshot restore --latest, ddev pull if configured, or a recent dump in the project via ddev import-db --file=<file>. Report failure only if none works.
 Skipped updates and advisories are not a failure: report them in the summary and still finish with status success.
@@ -113,7 +113,6 @@ var claudeDenied = []string{
 }
 
 var claudeCfg struct {
-	enabled    bool
 	model      string
 	prompt     string
 	updates    string // {{updates}} text for the configured update_mode
@@ -130,10 +129,9 @@ func orDefault(v, d string) string {
 	return d
 }
 
-// configureClaude copies the claude_* settings; mode "classic" disables the tmux/Claude runner.
-func configureClaude(cfg *config.Config) {
+// Configure copies the claude_* settings from the config; unset values keep defaults.
+func Configure(cfg *config.Config) {
 	c := &claudeCfg
-	c.enabled = cfg.Mode != "classic"
 	c.model = orDefault(cfg.ClaudeModel, defaultClaudeModel)
 	c.prompt = orDefault(cfg.ClaudePrompt, DefaultClaudePrompt)
 	c.updates = standardUpdates
@@ -248,7 +246,7 @@ type claudeResult struct {
 
 // runClaude hands the whole update to a Claude Code session in tmux and waits
 // for the result file the session writes. Go only verifies and cleans up.
-func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, commands []string, out chan<- StatusUpdate) {
+func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, out chan<- StatusUpdate) {
 	session := SessionName(name)
 	// Terminal statuses are sent only after the session is dead and the repo is settled.
 	send := func(status, command, output string) {
@@ -288,10 +286,6 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 		logging.Error("[%s] could not pre-trust folder: %v", name, err) // falls back to the trust-prompt detection below
 	}
 
-	numbered := make([]string, len(commands))
-	for i, c := range commands {
-		numbered[i] = fmt.Sprintf("%d. %s", i+1, c)
-	}
 	proj := claudeCfg.projects[name]
 	ignored, smoke := "none", "none"
 	if len(proj.IgnoredPackages) > 0 {
@@ -306,7 +300,7 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 	prompt := strings.NewReplacer(
 		"{{ignored_packages}}", ignored, "{{smoke_paths}}", smoke, "{{project_instructions}}", proj.ClaudeInstructions, "{{updates}}", claudeCfg.updates,
 		"{{project}}", name, "{{path}}", path, "{{start_branch}}", startBranch,
-		"{{temp_branch}}", tempBranch, "{{commands}}", strings.Join(numbered, "\n"), "{{result_file}}", resultFile,
+		"{{temp_branch}}", tempBranch, "{{result_file}}", resultFile,
 	).Replace(claudeCfg.prompt)
 
 	settings := map[string]any{"hooks": map[string]any{"Stop": []any{map[string]any{

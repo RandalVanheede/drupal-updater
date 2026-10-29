@@ -6,6 +6,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Removed
+- Classic mode (shell commands with retries and auto-healing). Claude is the only runner; the `mode`, `commands`, `default_commands`, `max_attempts` and `command_timeout_minutes` settings and the `{{commands}}` prompt placeholder are gone (old keys are ignored).
+
 ## [1.0.1] - 2026-10-28
 
 ### Added

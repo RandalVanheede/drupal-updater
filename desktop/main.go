@@ -90,7 +90,7 @@ func (a *App) SaveConfig(cfg *config.Config) error {
 	if a.pending == 0 {
 		a.sem = nil // rebuilt with the new max_concurrent on next start
 	}
-	executor.Configure(cfg) // apply Claude/retry settings without a restart
+	executor.Configure(cfg) // apply Claude settings without a restart
 	return config.SaveConfig(a.configPath, cfg)
 }
 
@@ -145,7 +145,6 @@ func (a *App) StartUpdate(req UpdateRequest) {
 		path        string
 		startBranch string
 		tempBranch  string
-		commands    []string
 		ctx         context.Context
 	}
 
@@ -170,18 +169,16 @@ func (a *App) StartUpdate(req UpdateRequest) {
 		projectPath := p.Path
 
 		pCfg := a.cfg.Projects[projectName]
-		pCfg.MergeWithDefaults(a.cfg)
+		pCfg.MergeWithDefaults()
 
 		tempBranch := executor.TempBranch(projectName)
 		startBranch := pCfg.GitStartBranch
-
-		commands := executor.BuildCommands(pCfg.Commands, startBranch, tempBranch)
 
 		ctx, cancel := context.WithCancel(parentCtx)
 		a.mu.Lock()
 		a.cancels[projectName] = cancel
 		a.mu.Unlock()
-		jobs = append(jobs, job{name: projectName, path: projectPath, startBranch: startBranch, tempBranch: tempBranch, commands: commands, ctx: ctx})
+		jobs = append(jobs, job{name: projectName, path: projectPath, startBranch: startBranch, tempBranch: tempBranch, ctx: ctx})
 	}
 	if len(jobs) == 0 {
 		a.mu.Lock()
@@ -220,7 +217,7 @@ func (a *App) StartUpdate(req UpdateRequest) {
 			go func() {
 				defer wg.Done()
 				sem <- struct{}{}
-				executor.Run(j.ctx, j.name, j.path, j.startBranch, j.tempBranch, j.commands, statusChan)
+				executor.Run(j.ctx, j.name, j.path, j.startBranch, j.tempBranch, statusChan)
 				<-sem
 				a.mu.Lock()
 				delete(a.cancels, j.name)
@@ -280,7 +277,7 @@ func (a *App) CleanupBranch(projectName string) error {
 	}
 
 	pCfg := a.cfg.Projects[projectName]
-	pCfg.MergeWithDefaults(a.cfg)
+	pCfg.MergeWithDefaults()
 
 	tempBranch := executor.TempBranch(projectName)
 	if err := executor.Cleanup(projectPath, pCfg.GitStartBranch, tempBranch); err != nil {
