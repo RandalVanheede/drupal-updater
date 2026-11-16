@@ -6,13 +6,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
-## [1.0.3] - 2026-11-16
+## [1.0.4] - 2026-11-16
+
+v1.0.3 was tagged but never released (its macOS build failed); its changes ship here.
 
 ### Added
 - Team-shared project settings: a `drupal-updater.yaml` (YAML or JSON body) committed in a project's repo wins per field over the local `projects:` entry, which only fills the gaps. The desktop Settings screen can write it ("Save to repo") and marks projects that have one.
 - Merge requests from the desktop confirm screen: after the rename, "Create MR" (or "Create all MRs") commits the run's changes, pushes the branch and opens a GitLab merge request with `glab` into `git_merge_target` (default: the start branch), with the run summary as description. A conflict with the target is merged in and resolved by a Claude session first; if that fails the merge is aborted. New per-project settings `git_merge_target` and `git_commit_message` (default `Drupal updates {date}`).
 
 - Auto-update for the desktop app: a daily check of GitHub releases shows a banner; "Update & restart" downloads the macOS arm64 DMG or Linux tarball, verifies its ed25519 signature (`<asset>.sig`, signed in CI with the `UPDATE_SIGNING_KEY` secret) and replaces the app. Refused while runs or merge requests are busy. The version is stamped at build time (`VERSION=v1.2.3 scripts/build-dmg.sh`); local builds are `dev` and never update.
+
+### Fixed
+- macOS release build runs on `macos-latest`; the `macos-14` runners are retired.
 
 ### Changed
 - Desktop app restyled in the Dynamate brand (Syne headings, navy/cream palette, light and dark theme).
@@ -49,8 +54,8 @@ First versioned release.
 - Classic mode: the configured shell commands with retries and auto-healing, no Claude.
 - Build scripts for macOS (`scripts/build-dmg.sh`) and Linux amd64/arm64 (`scripts/build-linux.sh`, `scripts/build-linux-docker.sh`), and a CI pipeline that builds them for each release tag.
 
-[Unreleased]: https://github.com/RandalVanheede/drupal-updater/compare/v1.0.3...1.0.x
-[1.0.3]: https://github.com/RandalVanheede/drupal-updater/compare/v1.0.2...v1.0.3
+[Unreleased]: https://github.com/RandalVanheede/drupal-updater/compare/v1.0.4...1.0.x
+[1.0.4]: https://github.com/RandalVanheede/drupal-updater/compare/v1.0.2...v1.0.4
 [1.0.2]: https://github.com/RandalVanheede/drupal-updater/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/RandalVanheede/drupal-updater/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/RandalVanheede/drupal-updater/releases/tag/v1.0.0
