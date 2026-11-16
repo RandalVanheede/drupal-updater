@@ -53,6 +53,23 @@ projects:
 
 An old single `base_folder:` key is still read and moved into `base_folders` on the next save.
 
+### Shared project settings (`drupal-updater.yaml`)
+
+Commit a `drupal-updater.yaml` in a project's root so every developer runs it the same way. It takes the same keys as a `projects:` entry (a JSON body works too, YAML reads it):
+
+```yaml
+git_start_branch: main
+git_new_branch_pattern: "release/{date}-*"
+git_merge_target: develop            # merge request target, default: the start branch
+git_commit_message: "Drupal updates {date}"
+ignored_packages: [drupal/some-module]
+smoke_paths: [/contact, "admin:/admin/commerce"]
+claude_instructions: |
+  Never update the search_api_solr config.
+```
+
+Per field, the repo file wins; the local `projects:` entry only fills fields the file leaves out. A file that does not parse is logged and ignored. It is read from the working tree when a run starts. In the desktop app, Settings → Project Overrides → "Save to repo" writes a project's local overrides into the file for you to commit.
+
 ### Defaults
 
 If a project has no config entry, these defaults apply:
@@ -63,6 +80,23 @@ If a project has no config entry, these defaults apply:
 | `git_new_branch_pattern` | `hotfix/{date}-drupal-updates`  |
 
 The final branch name is pre-filled from the pattern and can be edited before the rename. If that branch already exists (a second run on the same day) `-2`, `-3`, ... is appended. The old default `hotfix/*` is treated as the new default.
+
+## Merge requests (desktop)
+
+After confirming, each renamed branch gets a "Create MR" button ("Create all MRs" does every one). It:
+
+1. commits whatever the run left uncommitted (`git add -A`, message from `git_commit_message`),
+2. fetches `origin/<git_merge_target>` (default: the start branch) and dry-runs the merge,
+3. on a conflict, starts the merge without committing and hands it to a Claude session (same tmux setup as a run; it may run composer/drush but still cannot commit or push), then commits the merge; if Claude fails, `git merge --abort` puts the branch back,
+4. pushes the branch and runs `glab mr create` with the run summary as description, then shows an "Open MR" link.
+
+Needs [glab](https://gitlab.com/gitlab-org/cli) logged in for every GitLab host (`glab auth login`, and `glab auth login --hostname gitlab.example.com` for self-hosted); glab picks the host from the project's `origin` remote. Git 2.38+ is required for the dry run.
+
+## Auto-update (desktop)
+
+The desktop app checks `releases/latest` of this repo on start and daily, and shows a banner when a newer tag exists. "Update & restart" downloads the asset for the platform (macOS arm64 DMG, Linux x86_64/aarch64 tarball), verifies `<asset>.sig` with `updater.PublicKey`, then swaps the `.app` bundle (macOS) or runs `install.sh` (Linux) and restarts. Intel Macs and builds without `updater.PublicKey` only get a link to the release.
+
+One-time setup: `go run ./scripts/sign -genkey`, store the private key as the GitHub secret `UPDATE_SIGNING_KEY` and put the public key in `updater.PublicKey`. The release job signs every DMG and tarball with it. Builds get their version from `VERSION` (`VERSION=v1.2.3 scripts/build-dmg.sh`; CI passes the tag); without it the app is `dev` and never updates.
 
 ## Auto-Detection
 

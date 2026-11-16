@@ -5,7 +5,7 @@ set -eu
 cd "$(dirname "$0")/.."
 BIN=desktop/build/bin
 trap 'rm -rf "$BIN/drupal-updater.app" "$BIN/dmg-stage"' EXIT
-(cd desktop && "${WAILS:-$HOME/go/bin/wails}" build -clean)
+(cd desktop && "${WAILS:-$HOME/go/bin/wails}" build -clean -ldflags "-X main.version=${VERSION:-dev}")
 scripts/bundle-tmux.sh "$BIN/drupal-updater.app" 2>/dev/null
 rm -rf "$BIN/dmg-stage" "$BIN/Drupal-Updater.dmg"
 mkdir "$BIN/dmg-stage"

@@ -33,7 +33,7 @@ jobs:
           node-version: 22
       - run: brew install tmux
       - run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
-      - run: scripts/build-dmg.sh
+      - run: VERSION="$GITHUB_REF_NAME" scripts/build-dmg.sh
       - name: TUI binaries
         run: |
           GOARCH=arm64 go build -o dist/drupal-updater-darwin-arm64 .
@@ -61,7 +61,7 @@ jobs:
           node-version: 22
       - run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config
       - run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
-      - run: scripts/build-linux.sh
+      - run: VERSION="$GITHUB_REF_NAME" scripts/build-linux.sh
       - uses: actions/upload-artifact@v7
         with:
           name: linux-${{ matrix.runner }}
@@ -78,6 +78,13 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Sign assets for the auto-updater
+        run: go run ./scripts/sign dist/*.dmg dist/*.tar.gz
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
       - name: Release notes from CHANGELOG.md
         run: |
           v="${GITHUB_REF_NAME#v}"

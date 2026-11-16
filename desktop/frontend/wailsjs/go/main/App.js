@@ -30,6 +30,22 @@ export function GetConfig() {
   return window['go']['main']['App']['GetConfig']();
 }
 
+export function GetUpdate() {
+  return window['go']['main']['App']['GetUpdate']();
+}
+
+export function GetVersion() {
+  return window['go']['main']['App']['GetVersion']();
+}
+
+export function InstallUpdate() {
+  return window['go']['main']['App']['InstallUpdate']();
+}
+
+export function MergeRequest(arg1, arg2) {
+  return window['go']['main']['App']['MergeRequest'](arg1, arg2);
+}
+
 export function RenameBranch(arg1, arg2) {
   return window['go']['main']['App']['RenameBranch'](arg1, arg2);
 }
@@ -40,6 +56,10 @@ export function RetryProjects(arg1) {
 
 export function SaveConfig(arg1) {
   return window['go']['main']['App']['SaveConfig'](arg1);
+}
+
+export function SaveProjectFile(arg1, arg2) {
+  return window['go']['main']['App']['SaveProjectFile'](arg1, arg2);
 }
 
 export function SetUpdateMode(arg1) {

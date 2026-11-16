@@ -7,12 +7,14 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"drupal-updater/api"
 	"drupal-updater/config"
 	"drupal-updater/discovery"
 	"drupal-updater/executor"
 	"drupal-updater/logging"
+	"drupal-updater/updater"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -22,6 +24,8 @@ import (
 
 //go:embed all:frontend/dist
 var assets embed.FS
+
+var version = "dev" // set by the build scripts: -ldflags "-X main.version=v1.2.3"
 
 type App struct {
 	ctx        context.Context
@@ -33,6 +37,8 @@ type App struct {
 	cancels    map[string]context.CancelFunc // running projects
 	pending    int                           // projects started and not yet finished
 	sem        chan struct{}
+	summaries  map[string]string // last successful run's summary per project, used as merge request description
+	update     *updater.Release  // newer release found by the daily check
 }
 
 func NewApp() *App {
@@ -52,13 +58,58 @@ func NewApp() *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	go func() { // daily update check; the frontend shows a banner on "update-available"
+		for {
+			if r, err := updater.Check(version); err != nil {
+				logging.Error("update check: %v", err)
+			} else if r != nil {
+				a.mu.Lock()
+				a.update = r
+				a.mu.Unlock()
+				runtime.EventsEmit(ctx, "update-available", r)
+			}
+			time.Sleep(24 * time.Hour)
+		}
+	}()
+}
+
+func (a *App) GetVersion() string { return version }
+
+// GetUpdate returns the newer release found so far, or nil.
+func (a *App) GetUpdate() *updater.Release {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.update
+}
+
+// InstallUpdate replaces the app with the release found by the update check and restarts it.
+// Refused while a run or merge request is busy, since quitting would kill its Claude session's supervisor.
+func (a *App) InstallUpdate() error {
+	a.mu.Lock()
+	r, busy := a.update, len(a.cancels) > 0 || a.pending > 0
+	a.mu.Unlock()
+	if busy {
+		return fmt.Errorf("wait until all runs and merge requests are finished")
+	}
+	cmd, err := updater.Install(r)
+	if err != nil {
+		logging.Error("update install: %v", err)
+		return err
+	}
+	logging.Info("updated to %s, restarting", r.Version)
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("installed %s, but restart failed (start it yourself): %v", r.Version, err)
+	}
+	runtime.Quit(a.ctx)
+	return nil
 }
 
 // --- Bound methods ---
 
 type ProjectInfo struct {
-	Name string `json:"name"`
-	Path string `json:"path"`
+	Name     string `json:"name"`
+	Path     string `json:"path"`
+	RepoFile bool   `json:"repoFile"` // has a committed drupal-updater.yaml
 }
 
 func (a *App) DiscoverProjects() ([]ProjectInfo, error) {
@@ -68,7 +119,8 @@ func (a *App) DiscoverProjects() ([]ProjectInfo, error) {
 	}
 	result := make([]ProjectInfo, len(projects))
 	for i, p := range projects {
-		result[i] = ProjectInfo{Name: p.Name, Path: p.Path}
+		_, err := os.Stat(filepath.Join(p.Path, config.ProjectFile))
+		result[i] = ProjectInfo{Name: p.Name, Path: p.Path, RepoFile: err == nil}
 	}
 	return result, nil
 }
@@ -153,6 +205,10 @@ func (a *App) StartUpdate(req UpdateRequest) {
 	for _, projectName := range req.Projects {
 		a.mu.Lock()
 		_, busy := a.cancels[projectName]
+		if !busy {
+			a.cancels[projectName] = func() {} // claim it now so a merge request can't start in between
+			delete(a.summaries, projectName)   // a new run replaces the old merge request description
+		}
 		a.mu.Unlock()
 		if busy {
 			continue // already running: never start a second session for the same project
@@ -164,12 +220,14 @@ func (a *App) StartUpdate(req UpdateRequest) {
 				msg = err.Error()
 			}
 			runtime.EventsEmit(a.ctx, "status-update", map[string]string{"project": projectName, "status": "failed", "command": "discover", "output": msg})
+			a.mu.Lock()
+			delete(a.cancels, projectName)
+			a.mu.Unlock()
 			continue
 		}
 		projectPath := p.Path
 
-		pCfg := a.cfg.Projects[projectName]
-		pCfg.MergeWithDefaults()
+		pCfg := config.ForProject(a.cfg.Projects[projectName], projectPath)
 
 		tempBranch := executor.TempBranch(projectName)
 		startBranch := pCfg.GitStartBranch
@@ -199,6 +257,14 @@ func (a *App) StartUpdate(req UpdateRequest) {
 	// Emit updates to frontend
 	go func() {
 		for update := range statusChan {
+			if update.Status == "success" {
+				a.mu.Lock()
+				if a.summaries == nil {
+					a.summaries = make(map[string]string)
+				}
+				a.summaries[update.ProjectName] = update.Output
+				a.mu.Unlock()
+			}
 			runtime.EventsEmit(a.ctx, "status-update", map[string]string{
 				"project": update.ProjectName,
 				"status":  update.Status,
@@ -258,8 +324,7 @@ func (a *App) FinalBranch(projectName string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	pCfg := a.cfg.Projects[projectName]
-	pCfg.MergeWithDefaults()
+	pCfg := config.ForProject(a.cfg.Projects[projectName], projectPath)
 	return executor.FinalBranch(projectPath, pCfg.GitNewBranchPattern, projectName), nil
 }
 
@@ -287,8 +352,7 @@ func (a *App) CleanupBranch(projectName string) error {
 		return err
 	}
 
-	pCfg := a.cfg.Projects[projectName]
-	pCfg.MergeWithDefaults()
+	pCfg := config.ForProject(a.cfg.Projects[projectName], projectPath)
 
 	tempBranch := executor.TempBranch(projectName)
 	if err := executor.Cleanup(projectPath, pCfg.GitStartBranch, tempBranch); err != nil {
@@ -297,6 +361,72 @@ func (a *App) CleanupBranch(projectName string) error {
 
 	logging.Info("[%s] Cleaned up temp branch %s", projectName, tempBranch)
 	return nil
+}
+
+// SaveProjectFile writes a project's settings to drupal-updater.yaml in its repo, for the team to commit.
+func (a *App) SaveProjectFile(name string, pc config.ProjectConfig) (string, error) {
+	path, err := a.projectPath(name)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(path, config.ProjectFile), config.SaveProjectFile(path, pc)
+}
+
+// MergeRequest commits, pushes and opens a GitLab merge request for a project's final branch in the
+// background. Progress arrives as "merge-update" events {project, state: working|done|failed, message, url};
+// a conflict-resolving Claude session streams its screen as "status-update" like a run. Cancel with CancelProject.
+func (a *App) MergeRequest(name, branch string) {
+	emit := func(state, msg, url string) {
+		runtime.EventsEmit(a.ctx, "merge-update", map[string]string{"project": name, "state": state, "message": msg, "url": url})
+	}
+	path, err := a.projectPath(name)
+	if err != nil {
+		emit("failed", err.Error(), "")
+		return
+	}
+	a.mu.Lock()
+	if a.cancels == nil {
+		a.cancels = make(map[string]context.CancelFunc)
+	}
+	if _, busy := a.cancels[name]; busy {
+		a.mu.Unlock()
+		emit("failed", "project is busy", "")
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	a.cancels[name] = cancel
+	summary := a.summaries[name]
+	pc := config.ForProject(a.cfg.Projects[name], path)
+	a.mu.Unlock()
+
+	go func() {
+		defer func() {
+			a.mu.Lock()
+			delete(a.cancels, name)
+			a.mu.Unlock()
+			cancel()
+		}()
+		screens := make(chan executor.StatusUpdate, 10)
+		go func() {
+			for u := range screens {
+				runtime.EventsEmit(a.ctx, "status-update", map[string]string{"project": name, "screen": u.Screen})
+			}
+		}()
+		defer close(screens)
+		if summary == "" {
+			summary = "Drupal dependency updates by drupal-updater."
+		}
+		url, err := executor.MergeRequest(ctx, name, path, branch, pc, summary, func(m string) {
+			logging.Info("[%s] merge: %s", name, m)
+			emit("working", m, "")
+		}, screens)
+		if err != nil {
+			logging.Error("[%s] merge request failed: %v", name, err)
+			emit("failed", err.Error(), "")
+			return
+		}
+		emit("done", "Merge request opened", url)
+	}()
 }
 
 func main() {

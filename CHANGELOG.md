@@ -6,6 +6,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+- Team-shared project settings: a `drupal-updater.yaml` (YAML or JSON body) committed in a project's repo wins per field over the local `projects:` entry, which only fills the gaps. The desktop Settings screen can write it ("Save to repo") and marks projects that have one.
+- Merge requests from the desktop confirm screen: after the rename, "Create MR" (or "Create all MRs") commits the run's changes, pushes the branch and opens a GitLab merge request with `glab` into `git_merge_target` (default: the start branch), with the run summary as description. A conflict with the target is merged in and resolved by a Claude session first; if that fails the merge is aborted. New per-project settings `git_merge_target` and `git_commit_message` (default `Drupal updates {date}`).
+
+- Auto-update for the desktop app: a daily check of GitHub releases shows a banner; "Update & restart" downloads the macOS arm64 DMG or Linux tarball, verifies its ed25519 signature (`<asset>.sig`, signed in CI with the `UPDATE_SIGNING_KEY` secret) and replaces the app. Refused while runs or merge requests are busy. The version is stamped at build time (`VERSION=v1.2.3 scripts/build-dmg.sh`); local builds are `dev` and never update.
+
+### Changed
+- Desktop app restyled in the Dynamate brand (Syne headings, navy/cream palette, light and dark theme).
+
 ## [1.0.2] - 2026-10-29
 
 ### Added

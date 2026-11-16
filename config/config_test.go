@@ -57,3 +57,36 @@ func TestLoadMissingConfig(t *testing.T) {
 		t.Fatalf("got %+v, %v", cfg, err)
 	}
 }
+
+func TestForProject(t *testing.T) {
+	dir := t.TempDir()
+	local := ProjectConfig{GitStartBranch: "develop", IgnoredPackages: []string{"drupal/local"}, ClaudeInstructions: "mine"}
+
+	pc := ForProject(local, dir) // no repo file: local + defaults
+	if pc.GitStartBranch != "develop" || pc.GitNewBranchPattern != DefaultBranchPattern || pc.GitCommitMessage != DefaultCommitMessage {
+		t.Fatalf("without file: %+v", pc)
+	}
+
+	os.WriteFile(filepath.Join(dir, ProjectFile), []byte("git_start_branch: main\nignored_packages: [drupal/repo]\ngit_merge_target: staging\n"), 0o644)
+	pc = ForProject(local, dir)
+	if pc.GitStartBranch != "main" || !reflect.DeepEqual(pc.IgnoredPackages, []string{"drupal/repo"}) || pc.GitMergeTarget != "staging" || pc.ClaudeInstructions != "mine" {
+		t.Fatalf("repo should win, local fill gaps: %+v", pc)
+	}
+
+	os.WriteFile(filepath.Join(dir, ProjectFile), []byte(`{"git_start_branch": "json"}`), 0o644)
+	if pc = ForProject(local, dir); pc.GitStartBranch != "json" {
+		t.Fatalf("JSON body not read: %+v", pc)
+	}
+
+	os.WriteFile(filepath.Join(dir, ProjectFile), []byte("git_start_branch: [broken"), 0o644)
+	if pc = ForProject(local, dir); pc.GitStartBranch != "develop" {
+		t.Fatalf("broken file should fall back to local: %+v", pc)
+	}
+
+	if err := SaveProjectFile(dir, ProjectConfig{GitStartBranch: "saved"}); err != nil {
+		t.Fatal(err)
+	}
+	if pc = ForProject(ProjectConfig{}, dir); pc.GitStartBranch != "saved" {
+		t.Fatalf("saved file not read back: %+v", pc)
+	}
+}

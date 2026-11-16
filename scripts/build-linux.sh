@@ -7,7 +7,7 @@ BIN=desktop/build/bin
 PKG="drupal-updater-linux-$(uname -m)"
 TAGS=""
 pkg-config --exists webkit2gtk-4.1 2>/dev/null && TAGS="-tags webkit2_41" # Ubuntu 24.04+/Debian 13 ship only 4.1
-(cd desktop && "${WAILS:-$HOME/go/bin/wails}" build -clean $TAGS)
+(cd desktop && "${WAILS:-$HOME/go/bin/wails}" build -clean $TAGS -ldflags "-X main.version=${VERSION:-dev}")
 rm -rf "$BIN/$PKG"
 mkdir -p "$BIN/$PKG"
 mv "$BIN/drupal-updater-desktop" "$BIN/$PKG/"

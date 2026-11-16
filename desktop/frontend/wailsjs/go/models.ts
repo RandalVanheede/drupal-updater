@@ -6,6 +6,8 @@ export namespace config {
 	    IgnoredPackages: string[];
 	    SmokePaths: string[];
 	    ClaudeInstructions: string;
+	    GitMergeTarget: string;
+	    GitCommitMessage: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ProjectConfig(source);
@@ -18,6 +20,8 @@ export namespace config {
 	        this.IgnoredPackages = source["IgnoredPackages"];
 	        this.SmokePaths = source["SmokePaths"];
 	        this.ClaudeInstructions = source["ClaudeInstructions"];
+	        this.GitMergeTarget = source["GitMergeTarget"];
+	        this.GitCommitMessage = source["GitCommitMessage"];
 	    }
 	}
 	export class Config {
@@ -78,6 +82,7 @@ export namespace main {
 	export class ProjectInfo {
 	    name: string;
 	    path: string;
+	    repoFile: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new ProjectInfo(source);
@@ -87,6 +92,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
 	        this.path = source["path"];
+	        this.repoFile = source["repoFile"];
 	    }
 	}
 	export class UpdateRequest {
@@ -99,6 +105,27 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.projects = source["projects"];
+	    }
+	}
+
+}
+
+export namespace updater {
+	
+	export class Release {
+	    version: string;
+	    url: string;
+	    canInstall: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Release(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.version = source["version"];
+	        this.url = source["url"];
+	        this.canInstall = source["canInstall"];
 	    }
 	}
 

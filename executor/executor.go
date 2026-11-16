@@ -169,5 +169,5 @@ type StatusUpdate struct {
 
 // Run hands a project's update to a Claude session (see runClaude) and reports progress on outChan.
 func Run(ctx context.Context, projectName, projectPath, startBranch, tempBranch string, outChan chan<- StatusUpdate) {
-	runClaude(ctx, projectName, projectPath, startBranch, tempBranch, outChan)
+	runClaude(ctx, projectName, projectPath, startBranch, tempBranch, outChan, claudeCfg.prompt)
 }

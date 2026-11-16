@@ -1,3 +1,4 @@
+import '@fontsource-variable/syne'
 import { mount } from 'svelte'
 import App from './App.svelte'
 

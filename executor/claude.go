@@ -246,7 +246,9 @@ type claudeResult struct {
 
 // runClaude hands the whole update to a Claude Code session in tmux and waits
 // for the result file the session writes. Go only verifies and cleans up.
-func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, out chan<- StatusUpdate) {
+// promptTmpl is filled with the placeholders below plus the extra old/new pairs. With empty start/temp
+// branches nothing is cleaned up on failure and the branch is not checked on success.
+func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, out chan<- StatusUpdate, promptTmpl string, extra ...string) {
 	session := SessionName(name)
 	// Terminal statuses are sent only after the session is dead and the repo is settled.
 	send := func(status, command, output string) {
@@ -286,7 +288,7 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 		logging.Error("[%s] could not pre-trust folder: %v", name, err) // falls back to the trust-prompt detection below
 	}
 
-	proj := claudeCfg.projects[name]
+	proj := config.ForProject(claudeCfg.projects[name], path)
 	ignored, smoke := "none", "none"
 	if len(proj.IgnoredPackages) > 0 {
 		ignored = strings.Join(proj.IgnoredPackages, ", ")
@@ -297,11 +299,11 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 	if proj.ClaudeInstructions != "" {
 		proj.ClaudeInstructions = "\nExtra instructions for this project:\n" + proj.ClaudeInstructions + "\n"
 	}
-	prompt := strings.NewReplacer(
+	prompt := strings.NewReplacer(append([]string{
 		"{{ignored_packages}}", ignored, "{{smoke_paths}}", smoke, "{{project_instructions}}", proj.ClaudeInstructions, "{{updates}}", claudeCfg.updates,
 		"{{project}}", name, "{{path}}", path, "{{start_branch}}", startBranch,
 		"{{temp_branch}}", tempBranch, "{{result_file}}", resultFile,
-	).Replace(claudeCfg.prompt)
+	}, extra...)...).Replace(promptTmpl)
 
 	settings := map[string]any{"hooks": map[string]any{"Stop": []any{map[string]any{
 		"hooks": []any{map[string]any{"type": "command", "command": "touch " + sq(turnFile)}},

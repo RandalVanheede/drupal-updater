@@ -578,8 +578,7 @@ func (m *model) retryFailed() tea.Cmd {
 			continue
 		}
 
-		pCfg := m.cfg.Projects[pName]
-		pCfg.MergeWithDefaults()
+		pCfg := config.ForProject(m.cfg.Projects[pName], p.Path)
 
 		tempBranch := m.tempBranches[pName]
 		startBranch := pCfg.GitStartBranch
@@ -610,8 +609,7 @@ func (m *model) runConfirmation(doRenames bool) {
 		if p == nil {
 			continue
 		}
-		pCfg := m.cfg.Projects[pName]
-		pCfg.MergeWithDefaults()
+		pCfg := config.ForProject(m.cfg.Projects[pName], p.Path)
 
 		tempBranch := m.tempBranches[pName]
 		st := m.status[pName]
@@ -725,8 +723,7 @@ func (m *model) startExecution() {
 		}
 		m.totalJobs++
 
-		pCfg := m.cfg.Projects[p.Name]
-		pCfg.MergeWithDefaults()
+		pCfg := config.ForProject(m.cfg.Projects[p.Name], p.Path)
 
 		tempBranch := executor.TempBranch(p.Name)
 		m.tempBranches[p.Name] = tempBranch

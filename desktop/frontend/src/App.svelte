@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
-  import { DiscoverProjects, GetConfig, SaveConfig, StartUpdate, CancelProject, CancelAll, RenameBranch, CleanupBranch, RetryProjects, GetClaudeDefaults, SetUpdateMode, FinalBranch } from '../wailsjs/go/main/App';
-  import { EventsOn } from '../wailsjs/runtime/runtime';
+  import { DiscoverProjects, GetConfig, SaveConfig, StartUpdate, CancelProject, CancelAll, RenameBranch, CleanupBranch, RetryProjects, GetClaudeDefaults, SetUpdateMode, FinalBranch, SaveProjectFile, MergeRequest, GetVersion, GetUpdate, InstallUpdate } from '../wailsjs/go/main/App';
+  import { EventsOn, BrowserOpenURL } from '../wailsjs/runtime/runtime';
 
   let view = $state('projects');
   let projects = $state([]);
@@ -27,6 +27,11 @@
   let confirmResults = $state({});
   let confirmDone = $state(false);
   let prevView = $state('');
+  let merges = $state({}); // project -> {state: working|done|failed, message, url}
+  let repoSaved = $state({}); // project -> result of writing drupal-updater.yaml
+  let version = $state('');
+  let update = $state(null); // newer release {version, url, canInstall}
+  let updateMsg = $state('');
 
   onMount(async () => {
     // Register event listeners once
@@ -44,6 +49,11 @@
         logs[name] += '$ ' + cmd + '\n';
       }
     });
+
+    EventsOn('merge-update', (u) => { merges[u.project] = u; });
+    EventsOn('update-available', (r) => { update = r; });
+    version = await GetVersion();
+    update = (await GetUpdate()) || update;
 
     EventsOn('all-done', async () => {
       allDone = true;
@@ -107,6 +117,7 @@
     allDone = false;
     confirmDone = false;
     confirmResults = {};
+    merges = {};
     branchNames = {};
     selectedNames.forEach(name => {
       statuses[name] = 'idle';
@@ -175,6 +186,31 @@
     isRunning = false;
   }
 
+  async function installUpdate() {
+    updateMsg = 'Downloading ' + update.version + '…';
+    try {
+      await InstallUpdate(); // the app restarts on success
+    } catch (e) {
+      updateMsg = '✗ ' + (e?.message || e);
+    }
+  }
+
+  const renamed = name => confirmResults[name] === '✓ renamed';
+
+  function openMergeRequest(name) {
+    merges[name] = { state: 'working', message: 'starting…' };
+    MergeRequest(name, branchNames[name]);
+  }
+
+  async function saveToRepo(name) {
+    try {
+      repoSaved[name] = '✓ wrote ' + await SaveProjectFile(name, config.Projects[name]) + ' — commit it';
+      await loadProjects();
+    } catch (e) {
+      repoSaved[name] = '✗ ' + (e?.message || e);
+    }
+  }
+
   function retryFailed() {
     const failed = Object.keys(statuses).filter(name =>
       statuses[name] === 'failed' || statuses[name] === 'cancelled'
@@ -199,6 +235,17 @@
 <main>
   <header>
     <h1>◆ Drupal Updater</h1>
+    {#if update}
+      <div class="update-banner">
+        <span>{updateMsg || `${update.version} available`}</span>
+        {#if update.canInstall && !updateMsg.startsWith('Downloading')}
+          <button class="btn-sm" onclick={installUpdate} disabled={isRunning && !confirmDone}>Update &amp; restart</button>
+        {/if}
+        <button class="btn-sm" onclick={() => BrowserOpenURL(update.url)}>Release notes ↗</button>
+      </div>
+    {:else if version}
+      <span class="version">{version}</span>
+    {/if}
     <nav>
       <button class:active={view === 'projects'} onclick={() => view = 'projects'}>Projects</button>
       <button class:active={view === 'config'} onclick={() => view = 'config'}>Settings</button>
@@ -228,6 +275,7 @@
             <label>
               <input type="checkbox" bind:checked={selected[project.name]} />
               <span class="name">{project.name}</span>
+              {#if project.repoFile}<span class="badge badge-repo" title="Settings from the repo's drupal-updater.yaml">repo config</span>{/if}
               <span class="path">{project.path}</span>
             </label>
           </li>
@@ -317,12 +365,16 @@
       </div>
 
       <h3>Project Overrides</h3>
+      <p class="hint">A <code>drupal-updater.yaml</code> committed in a project's repo is shared with the team and wins per field; these local overrides only fill the gaps. "Save to repo" writes this project's overrides into that file for you to commit.</p>
       <div class="project-configs">
         {#each Object.keys(config.Projects || {}) as name}
           <div class="project-config-item">
             <div class="project-config-header">
               <strong>{name}</strong>
+              {#if projects.find(p => p.name === name)?.repoFile}<span class="badge badge-repo">repo config</span>{/if}
+              {#if repoSaved[name]}<span class="confirm-result">{repoSaved[name]}</span>{/if}
               <div>
+                <button class="btn-sm" onclick={() => saveToRepo(name)} disabled={!projects.some(p => p.name === name)}>Save to repo</button>
                 <button class="btn-sm" onclick={() => editingProject = editingProject === name ? null : name}>
                   {editingProject === name ? 'Close' : 'Edit'}
                 </button>
@@ -339,6 +391,14 @@
                 <label>
                   Branch pattern
                   <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="hotfix/{'{date}'}-drupal-updates" bind:value={config.Projects[name].GitNewBranchPattern} />
+                </label>
+                <label>
+                  Merge request target (default: start branch)
+                  <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" bind:value={config.Projects[name].GitMergeTarget} />
+                </label>
+                <label>
+                  Commit message for the merge request
+                  <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Drupal updates {'{date}'}" bind:value={config.Projects[name].GitCommitMessage} />
                 </label>
                 <label>
                   Ignored packages (comma-separated)
@@ -433,6 +493,17 @@
             <span class="name">{name}</span>
             {#if confirmDone}
               <span class="confirm-result">{confirmResults[name] || ''}</span>
+              {#if renamed(name)}
+                {#if merges[name]?.state === 'done'}
+                  <button class="btn-sm" onclick={() => BrowserOpenURL(merges[name].url)}>Open MR ↗</button>
+                {:else if merges[name]?.state === 'working'}
+                  <span class="merge-msg" title={merges[name].message}>{merges[name].message}</span>
+                  <button class="btn-sm btn-danger" onclick={() => CancelProject(name)}>Cancel</button>
+                {:else}
+                  {#if merges[name]?.state === 'failed'}<span class="merge-msg merge-failed" title={merges[name].message}>✗ {merges[name].message}</span>{/if}
+                  <button class="btn-sm" onclick={() => openMergeRequest(name)}>{merges[name] ? 'Retry MR' : 'Create MR'}</button>
+                {/if}
+              {/if}
             {:else if statuses[name] === 'success'}
               <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" bind:value={branchNames[name]} class="branch-name-input" />
             {:else}
@@ -445,6 +516,9 @@
 
       <div class="footer-actions">
         {#if confirmDone}
+          {#if Object.keys(statuses).some(n => renamed(n) && !merges[n])}
+            <button class="btn-sm" onclick={() => Object.keys(statuses).filter(n => renamed(n) && !merges[n]).forEach(openMergeRequest)}>Create all MRs</button>
+          {/if}
           <button class="btn-primary" onclick={() => view = 'projects'}>Done</button>
         {:else}
           {#if Object.values(statuses).some(s => s === 'failed' || s === 'cancelled')}
@@ -458,6 +532,75 @@
 </main>
 
 <style>
+  /* Dynamate brand tokens. Light is default, dark follows the OS. */
+  :global(:root) {
+    --navy: #03102b;
+    --beige: #ede9e3;
+    --cream: #fffbf5;
+    --warm: #f5f1e9;
+    --warm-strong: #e3ddd3;
+    --grey: #d8d9d8;
+    --blue: #06428f;
+    --red: #f1062c;
+    --sky: #78caf0;
+
+    --bg: var(--beige);
+    --surface: var(--cream);
+    --text: var(--navy);
+    --text-muted: #4b566c;
+    --border: var(--grey);
+    --border-strong: #b9bcc2;
+    --hover: var(--warm);
+    --selected: var(--warm-strong);
+    --accent: var(--blue);
+    --accent-hover: #04336f;
+    --on-accent: var(--cream);
+    --danger: #c70522;
+    --danger-bg: #fde8eb;
+    --success: #14703f;
+    --success-bg: #dff1e7;
+    --running: var(--blue);
+    --running-bg: #dcf0fb;
+    --running-dot: var(--sky);
+    --terminal-bg: var(--navy);
+    --terminal-text: #e8e4dc;
+    --focus: var(--blue);
+
+    --font-head: 'Syne Variable', 'Syne', system-ui, sans-serif;
+    --font-body: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-mono: ui-monospace, 'SF Mono', Menlo, monospace;
+    --radius: 6px;
+    --radius-sm: 4px;
+    color-scheme: light;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :global(:root) {
+      --bg: var(--navy);
+      --surface: #07173a;
+      --text: var(--cream);
+      --text-muted: #a3adc2;
+      --border: #1c2c52;
+      --border-strong: #2f4274;
+      --hover: #0c1f48;
+      --selected: #12295a;
+      --accent: var(--sky);
+      --accent-hover: #9ad6f5;
+      --on-accent: var(--navy);
+      --danger: #ff5a73;
+      --danger-bg: #3a0f22;
+      --success: #5fd39a;
+      --success-bg: #0d2e2a;
+      --running: var(--sky);
+      --running-bg: #0b2a4d;
+      --running-dot: var(--sky);
+      --terminal-bg: #020b1f;
+      --terminal-text: #e3ddd3;
+      --focus: var(--sky);
+      color-scheme: dark;
+    }
+  }
+
   :global(*) {
     margin: 0;
     padding: 0;
@@ -465,82 +608,94 @@
   }
 
   :global(body) {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-    background: #1a1a2e;
-    color: #e0e0e0;
+    font-family: var(--font-body);
+    background: var(--bg);
+    color: var(--text);
     overflow: hidden;
     height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  :global(:focus-visible) {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
   }
 
   main {
     display: flex;
     flex-direction: column;
     height: 100vh;
-    padding: 16px;
-    gap: 16px;
+    padding: 20px 24px;
+    gap: 18px;
   }
 
   header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding-bottom: 12px;
-    border-bottom: 1px solid #2a2a4a;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--border-strong);
+  }
+
+  h1, h2, h3 {
+    font-family: var(--font-head);
+    color: var(--text);
   }
 
   h1 {
-    font-size: 1.3rem;
-    color: #c084fc;
-    font-weight: 700;
+    font-size: 1.35rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
   }
 
+  /* the spark: the leading diamond is the one red accent */
+  h1::first-letter { color: var(--red); }
+
   h2 {
-    font-size: 1rem;
-    color: #e0e0e0;
-    font-weight: 600;
+    font-size: 1.1rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
   }
 
   h3 {
-    font-size: 0.85rem;
-    color: #a0a0a0;
-    margin-top: 16px;
+    font-size: 0.95rem;
+    font-weight: 700;
+    margin-top: 20px;
     margin-bottom: 8px;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
   }
 
   nav {
     display: flex;
-    gap: 4px;
+    gap: 6px;
   }
 
   nav button {
     background: transparent;
-    border: 1px solid #3a3a5a;
-    color: #a0a0a0;
+    border: 1px solid transparent;
+    color: var(--text-muted);
     padding: 6px 14px;
-    border-radius: 6px;
+    border-radius: var(--radius);
     cursor: pointer;
-    font-size: 0.8rem;
-    transition: all 0.15s;
+    font: 600 0.82rem var(--font-body);
+    transition: background 0.15s, color 0.15s;
   }
 
   nav button:hover {
-    background: #2a2a4a;
-    color: #e0e0e0;
+    background: var(--hover);
+    color: var(--text);
   }
 
   nav button.active {
-    background: #c084fc22;
-    border-color: #c084fc;
-    color: #c084fc;
+    background: var(--text);
+    border-color: var(--text);
+    color: var(--bg);
   }
 
   .panel {
     flex: 1;
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 14px;
     overflow: hidden;
   }
 
@@ -558,8 +713,9 @@
   .config-panel .footer-actions {
     position: sticky;
     bottom: 0;
-    background: #1a1a2e;
-    padding: 8px 0;
+    background: var(--bg);
+    padding: 12px 0;
+    margin-bottom: 0;
   }
 
   .panel-header {
@@ -572,24 +728,23 @@
     list-style: none;
     flex: 1;
     overflow-y: auto;
-    border: 1px solid #2a2a4a;
-    border-radius: 8px;
-    background: #16162a;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
   }
 
   .project-list li {
-    border-bottom: 1px solid #2a2a4a;
+    border-bottom: 1px solid var(--border);
     transition: background 0.1s;
   }
 
   .project-list li:last-child { border-bottom: none; }
 
-  .project-list li:hover {
-    background: #1e1e3a;
-  }
+  .project-list li:hover { background: var(--hover); }
 
   .project-list li.selected {
-    background: #c084fc08;
+    background: var(--selected);
+    box-shadow: inset 3px 0 0 var(--accent);
   }
 
   .project-list label {
@@ -601,26 +756,28 @@
   }
 
   .project-list input[type="checkbox"] {
-    accent-color: #c084fc;
+    accent-color: var(--accent);
     width: 16px;
     height: 16px;
   }
 
   .project-list .name {
-    font-weight: 500;
-    color: #e0e0e0;
+    font-weight: 600;
+    color: var(--text);
   }
 
   .project-list .path {
-    font-size: 0.75rem;
-    color: #666;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--text-muted);
     margin-left: auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
-  .status-list li {
-    border-bottom: 1px solid #2a2a4a;
-  }
-
+  .status-list li { border-bottom: 1px solid var(--border); }
   .status-list li:last-child { border-bottom: none; }
 
   .status-item {
@@ -642,131 +799,157 @@
     background: transparent;
     border: none;
     color: inherit;
+    font: inherit;
     cursor: pointer;
     text-align: left;
     transition: background 0.1s;
   }
 
-  .status-btn:hover { background: #1e1e3a; }
+  .status-btn:hover { background: var(--hover); }
+  .status-btn .name { font-weight: 600; }
 
+  /* Shape + color: filled circle = done/active, square = failed, ring = idle/cancelled */
   .status-indicator {
     width: 10px;
     height: 10px;
     border-radius: 50%;
     flex-shrink: 0;
+    border: 2px solid transparent;
   }
 
-  .status-idle { background: #555; }
-  .status-running { background: #f59e0b; animation: pulse 1s infinite; }
-  .status-success { background: #4ade80; }
-  .status-failed { background: #ef4444; }
-  .status-cancelled { background: #888; }
+  .status-idle { border-color: var(--border-strong); }
+  .status-running { background: var(--running-dot); border-color: var(--running); animation: pulse 1.2s ease-in-out infinite; }
+  .status-success { background: var(--success); border-color: var(--success); }
+  .status-failed { background: var(--danger); border-color: var(--danger); border-radius: 2px; }
+  .status-cancelled { border-color: var(--text-muted); background: linear-gradient(var(--text-muted), var(--text-muted)) center / 100% 2px no-repeat; }
 
   @keyframes pulse {
     0%, 100% { opacity: 1; }
-    50% { opacity: 0.4; }
+    50% { opacity: 0.35; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .status-running { animation: none; }
   }
 
   .status-label {
     font-size: 0.7rem;
     font-weight: 700;
-    letter-spacing: 0.05em;
-    width: 70px;
-    color: #a0a0a0;
+    letter-spacing: 0.04em;
+    width: 76px;
+    color: var(--text-muted);
   }
 
   .badge {
-    font-size: 0.7rem;
-    padding: 3px 8px;
-    border-radius: 4px;
+    font-size: 0.72rem;
+    padding: 2px 8px;
+    border: 1px solid currentColor;
+    border-radius: var(--radius-sm);
     font-weight: 600;
+    white-space: nowrap;
   }
 
-  .badge-success { background: #4ade8022; color: #4ade80; }
-  .badge-running { background: #f59e0b22; color: #f59e0b; }
-  .badge-failed { background: #ef444422; color: #ef4444; }
-  .badge-idle { background: #55555522; color: #888; }
+  .badge-success { background: var(--success-bg); color: var(--success); }
+  .badge-running { background: var(--running-bg); color: var(--running); }
+  .badge-failed { background: var(--danger-bg); color: var(--danger); }
+  .badge-cancelled { background: transparent; color: var(--text-muted); border-style: dashed; }
+  .badge-idle { background: transparent; color: var(--text-muted); }
+  .badge-repo {
+    background: transparent;
+    color: var(--accent);
+    font-weight: 500;
+    padding: 1px 6px;
+  }
 
   .footer-actions {
     display: flex;
     align-items: center;
     gap: 12px;
-    padding-top: 12px;
-    border-top: 1px solid #2a2a4a;
+    padding-top: 14px;
+    border-top: 1px solid var(--border-strong);
   }
 
   .update-mode {
     display: flex;
     align-items: center;
     gap: 8px;
-    font-size: 0.8rem;
-    color: #a0a0a0;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text-muted);
   }
 
-  input[type="text"], input[type="number"], textarea {
-    background: #16162a;
-    border: 1px solid #3a3a5a;
-    color: #e0e0e0;
+  input[type="text"], input[type="number"], textarea, select {
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    color: var(--text);
     padding: 8px 10px;
-    border-radius: 6px;
+    border-radius: var(--radius);
+    font-family: var(--font-body);
     font-size: 0.85rem;
-    outline: none;
-    transition: border-color 0.15s;
+    transition: border-color 0.15s, box-shadow 0.15s;
   }
 
-  input:focus, textarea:focus {
-    border-color: #c084fc;
+  input[type="text"]:focus, input[type="number"]:focus, textarea:focus, select:focus {
+    outline: none;
+    border-color: var(--focus);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus) 30%, transparent);
   }
+
+  input::placeholder, textarea::placeholder { color: var(--text-muted); opacity: 0.8; }
 
   textarea {
-    font-family: 'SF Mono', 'Fira Code', monospace;
-    font-size: 0.8rem;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
     resize: vertical;
   }
 
+  select { cursor: pointer; }
+
   .btn-primary {
-    background: #c084fc;
-    color: #1a1a2e;
-    border: none;
+    background: var(--accent);
+    color: var(--on-accent);
+    border: 1px solid var(--accent);
     padding: 8px 18px;
-    border-radius: 6px;
-    font-weight: 600;
-    font-size: 0.85rem;
+    border-radius: var(--radius);
+    font: 700 0.85rem var(--font-body);
     cursor: pointer;
-    transition: background 0.15s;
+    transition: background 0.15s, border-color 0.15s;
     margin-left: auto;
   }
 
-  .btn-primary:hover { background: #a855f7; }
+  .btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
   .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
 
   .btn-sm {
     background: transparent;
-    border: 1px solid #3a3a5a;
-    color: #a0a0a0;
+    border: 1px solid var(--border-strong);
+    color: var(--text);
     padding: 4px 10px;
-    border-radius: 4px;
-    font-size: 0.75rem;
+    border-radius: var(--radius-sm);
+    font: 600 0.75rem var(--font-body);
     cursor: pointer;
-    transition: all 0.15s;
+    transition: background 0.15s, border-color 0.15s;
   }
 
-  .btn-sm:hover { background: #2a2a4a; color: #e0e0e0; }
+  .btn-sm:hover { background: var(--hover); border-color: var(--text); }
+  .btn-sm:disabled { opacity: 0.4; cursor: not-allowed; }
 
-  .btn-danger { border-color: #ef444466; color: #ef4444; }
-  .btn-danger:hover { background: #ef444422; }
+  .btn-danger { border-color: var(--danger); color: var(--danger); }
+  .btn-danger:hover { background: var(--danger-bg); border-color: var(--danger); }
 
   .config-group {
     display: flex;
     gap: 16px;
   }
 
-  .config-group label {
+  .config-group label,
+  .project-config-edit label {
     display: flex;
     flex-direction: column;
     gap: 4px;
     font-size: 0.8rem;
-    color: #a0a0a0;
+    font-weight: 600;
+    color: var(--text-muted);
   }
 
   .project-configs {
@@ -778,10 +961,10 @@
   }
 
   .project-config-item {
-    border: 1px solid #2a2a4a;
-    border-radius: 6px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
     padding: 10px 14px;
-    background: #16162a;
+    background: var(--surface);
   }
 
   .project-config-header {
@@ -802,63 +985,65 @@
     gap: 8px;
   }
 
-  .project-config-edit label {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    font-size: 0.8rem;
-    color: #a0a0a0;
-  }
-
   .add-project {
     display: flex;
     gap: 8px;
     align-items: center;
   }
 
-  select {
-    background: #16162a;
-    border: 1px solid #3a3a5a;
-    color: #e0e0e0;
-    padding: 8px 10px;
-    border-radius: 6px;
-    font-size: 0.85rem;
-    outline: none;
-    transition: border-color 0.15s;
-    cursor: pointer;
-  }
+  .live-title { margin: 12px 0 6px; font-size: 0.85rem; color: var(--text-muted); }
+  .live-output { font-size: 0.7rem; white-space: pre; overflow-x: auto; }
 
-  select:focus {
-    border-color: #c084fc;
-  }
-
-  .live-title { margin: 12px 0 6px; font-size: 13px; color: #8a8ab0; }
-  .live-output { font-size: 11px; white-space: pre; overflow-x: auto; }
   .log-output {
     flex: 1;
     overflow-y: auto;
-    background: #0d0d1a;
-    border: 1px solid #2a2a4a;
-    border-radius: 8px;
+    background: var(--terminal-bg);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
     padding: 14px;
-    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-family: var(--font-mono);
     font-size: 0.78rem;
     line-height: 1.5;
     white-space: pre-wrap;
     word-break: break-all;
-    color: #a0e0a0;
+    color: var(--terminal-text);
   }
 
   .empty {
     text-align: center;
-    color: #666;
+    color: var(--text-muted);
     padding: 40px;
     font-size: 0.9rem;
   }
 
-  .actions {
+  .update-banner, .version {
     margin-left: auto;
+    margin-right: 16px;
   }
+  .update-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 4px 4px 12px;
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    background: var(--running-bg);
+    color: var(--text);
+    font-size: 0.8rem;
+  }
+  .version {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+
+  .hint {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    line-height: 1.45;
+  }
+
+  .actions { margin-left: auto; }
 
   .search-box {
     flex: 1;
@@ -877,19 +1062,36 @@
     gap: 10px;
   }
 
+  .confirm-item .name { font-weight: 600; }
+
   .branch-name-input {
     flex: 1;
     max-width: 300px;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
   }
 
   .cleanup-note {
     font-size: 0.8rem;
-    color: #888;
+    color: var(--text-muted);
     font-style: italic;
   }
 
   .confirm-result {
-    font-size: 0.8rem;
-    color: #a0a0a0;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--text-muted);
   }
+
+  .merge-msg {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+  }
+
+  .merge-failed { color: var(--danger); }
 </style>
