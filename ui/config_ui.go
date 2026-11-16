@@ -2,11 +2,17 @@ package ui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
 	"drupal-updater/config"
+	"drupal-updater/discovery"
+	"drupal-updater/executor"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -15,13 +21,22 @@ import (
 // Config sub-states
 const (
 	ConfigMenu = iota
-	ConfigEditBaseFolders
-	ConfigEditMaxConcurrent
 	ConfigProjectList
 	ConfigProjectEdit
-	ConfigProjectEditField
-	ConfigEditProjectPaths
+	ConfigEditField
+	ConfigNewProject
 )
+
+// field is one editable setting: the same settings, in the same groups, as the desktop Settings screen.
+type field struct {
+	section, label string
+	get            func() string // value as edited ("" = inherit / default)
+	set            func(string)
+	show           func() string // value as displayed; nil = get
+	options        []string      // enter cycles through these instead of editing
+	multi          bool          // edited in a textarea, one item per line
+	placeholder    string        // what an empty value means
+}
 
 type configModel struct {
 	cfg        *config.Config
@@ -32,29 +47,35 @@ type configModel struct {
 	message string
 
 	input textinput.Model
+	area  textarea.Model
+	edit  *field // field being edited
+	back  int    // state to return to after editing
+
+	embedded bool // inside the main TUI: closing returns there instead of quitting
 
 	// Project editing
 	projectNames   []string
 	projectCursor  int
 	editingProject string
 	fieldCursor    int
-	editingField   string
 }
 
 func NewConfigModel(cfg *config.Config, configPath string) *configModel {
 	ti := textinput.New()
-	ti.Focus()
-	ti.CharLimit = 256
-	ti.Width = 50
+	ti.CharLimit = 512
+	ti.Width = 60
 	ti.PromptStyle = lipgloss.NewStyle().Foreground(cyan)
 	ti.TextStyle = lipgloss.NewStyle().Foreground(dimWhite)
+	ta := textarea.New()
+	ta.SetWidth(90)
+	ta.SetHeight(14)
+	ta.CharLimit = 0
+	ta.ShowLineNumbers = false
 
-	cm := &configModel{
-		cfg:        cfg,
-		configPath: configPath,
-		state:      ConfigMenu,
-		input:      ti,
+	if cfg.Projects == nil {
+		cfg.Projects = make(map[string]config.ProjectConfig)
 	}
+	cm := &configModel{cfg: cfg, configPath: configPath, state: ConfigMenu, input: ti, area: ta}
 	cm.refreshProjectNames()
 	return cm
 }
@@ -64,209 +85,321 @@ func (cm *configModel) refreshProjectNames() {
 	for name := range cm.cfg.Projects {
 		cm.projectNames = append(cm.projectNames, name)
 	}
+	slices.Sort(cm.projectNames)
+}
+
+func list(s string) []string { return splitList(strings.ReplaceAll(s, "\n", ",")) }
+
+func orText(v, empty string) string {
+	if v == "" {
+		return empty
+	}
+	return v
+}
+
+// globalFields are the settings menu entries, in desktop order.
+func (cm *configModel) globalFields() []field {
+	c := cm.cfg
+	d := &c.Defaults
+	prompt, tools := executor.ClaudeDefaults()
+	str := func(p *string) (func() string, func(string)) {
+		return func() string { return *p }, func(v string) { *p = strings.TrimSpace(v) }
+	}
+	sl := func(p *[]string) (func() string, func(string)) {
+		return func() string { return strings.Join(*p, ", ") }, func(v string) { *p = list(v) }
+	}
+	num := func(p *int, def int) (func() string, func(string)) {
+		return func() string { return strconv.Itoa(orInt(*p, def)) }, func(v string) {
+			if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+				*p = n
+			}
+		}
+	}
+	var fs []field
+	add := func(section, label string, get func() string, set func(string), f field) {
+		f.section, f.label, f.get, f.set = section, label, get, set
+		fs = append(fs, f)
+	}
+	g, s := sl(&c.BaseFolders)
+	add("Projects", "Base folders", g, s, field{placeholder: "scanned one level deep"})
+	g, s = sl(&c.ProjectPaths)
+	add("Projects", "Extra project paths", g, s, field{placeholder: "single projects"})
+	g, s = sl(&c.ExcludedProjects)
+	add("Projects", "Excluded projects", g, s, field{placeholder: "none; * wildcards"})
+	g, s = num(&c.MaxConcurrent, 3)
+	add("Projects", "Max concurrent runs", g, s, field{})
+	g, s = str(&c.UpdateMode)
+	add("Projects", "Update mode", func() string { return orText(c.UpdateMode, "standard") }, s, field{options: []string{"standard", "disaster"}})
+
+	g, s = str(&d.GitStartBranch)
+	add("Branch defaults", "Start branch", g, s, field{placeholder: "master"})
+	g, s = str(&d.GitNewBranchPattern)
+	add("Branch defaults", "Final branch pattern", g, s, field{placeholder: config.DefaultBranchPattern})
+	g, s = str(&d.GitMergeTarget)
+	add("Branch defaults", "Merge request target", g, s, field{placeholder: "the start branch"})
+	g, s = str(&d.GitCommitMessage)
+	add("Branch defaults", "Commit message", g, s, field{placeholder: config.DefaultCommitMessage})
+
+	g, s = str(&c.ClaudeModel)
+	add("Claude", "Model", g, s, field{placeholder: "sonnet"})
+	add("Claude", "Permission mode", func() string { return orText(c.ClaudePermissionMode, "dontAsk") },
+		func(v string) { c.ClaudePermissionMode = v }, field{options: []string{"dontAsk", "acceptEdits", "plan", "manual"}})
+	g, s = num(&c.ClaudeTimeoutMinutes, 60)
+	add("Claude", "Timeout (minutes)", g, s, field{})
+	add("Claude", "Allowed tools",
+		func() string { return strings.Join(orList(c.ClaudeAllowedTools, tools), "\n") },
+		func(v string) { // store the default as empty so built-in improvements still apply, as the desktop does
+			if c.ClaudeAllowedTools = list(v); slices.Equal(c.ClaudeAllowedTools, tools) {
+				c.ClaudeAllowedTools = nil
+			}
+		},
+		field{multi: true, show: func() string { return strings.Join(orList(c.ClaudeAllowedTools, tools), ", ") }})
+	add("Claude", "Prompt",
+		func() string { return orText(c.ClaudePrompt, prompt) },
+		func(v string) {
+			if c.ClaudePrompt = v; strings.TrimSpace(v) == strings.TrimSpace(prompt) || strings.TrimSpace(v) == "" {
+				c.ClaudePrompt = ""
+			}
+		},
+		field{multi: true, show: func() string {
+			if c.ClaudePrompt != "" {
+				return "custom"
+			}
+			return "default"
+		}})
+	return fs
+}
+
+func orInt(v, d int) int {
+	if v > 0 {
+		return v
+	}
+	return d
+}
+
+func orList(v, d []string) []string {
+	if len(v) > 0 {
+		return v
+	}
+	return d
+}
+
+// projectFields edit the local projects: entry; display shows what a run uses.
+func (cm *configModel) projectFields(name string) []field {
+	pc := cm.cfg.Projects[name]
+	save := func() { cm.cfg.Projects[name] = pc }
+	str := func(label string, p *string, inherited string) field {
+		return field{label: label, get: func() string { return *p }, set: func(v string) { *p = strings.TrimSpace(v); save() }, placeholder: inherited}
+	}
+	sl := func(label string, p *[]string) field {
+		return field{label: label, get: func() string { return strings.Join(*p, ", ") }, set: func(v string) { *p = list(v); save() }, placeholder: "none"}
+	}
+	inh := cm.cfg.Defaults
+	inh.MergeWithDefaults()
+	return []field{
+		str("Start branch", &pc.GitStartBranch, inh.GitStartBranch),
+		str("Final branch pattern", &pc.GitNewBranchPattern, inh.GitNewBranchPattern),
+		str("Merge request target", &pc.GitMergeTarget, orText(inh.GitMergeTarget, "the start branch")),
+		str("Commit message", &pc.GitCommitMessage, inh.GitCommitMessage),
+		sl("Ignored packages", &pc.IgnoredPackages),
+		sl("Smoke-test paths", &pc.SmokePaths),
+		{label: "Claude instructions", multi: true, placeholder: "none",
+			get: func() string { return pc.ClaudeInstructions },
+			set: func(v string) { pc.ClaudeInstructions = strings.TrimSpace(v); save() }},
+	}
+}
+
+// projectPath finds a configured project's folder, if it is discovered.
+func (cm *configModel) projectPath(name string) (string, bool) {
+	projects, _ := discovery.DiscoverProjects(cm.cfg.BaseFolders, cm.cfg.ProjectPaths, cm.cfg.ExcludedProjects)
+	p, ok := discovery.Find(projects, name)
+	return p.Path, ok
+}
+
+// effective returns what a run uses for a project (repo drupal-updater.yaml over the local settings, then
+// defaults), the local settings with defaults, and whether a repo file exists.
+func (cm *configModel) effective(name string) (eff, local config.ProjectConfig, repoFile bool) {
+	local = cm.cfg.Project(name)
+	local.MergeWithDefaults()
+	eff = local
+	if path, ok := cm.projectPath(name); ok {
+		eff = config.ForProject(cm.cfg.Project(name), path)
+		_, err := os.Stat(filepath.Join(path, config.ProjectFile))
+		repoFile = err == nil
+	}
+	return eff, local, repoFile
+}
+
+// settingsClosedMsg tells the main TUI that the embedded settings screen was closed.
+type settingsClosedMsg struct{}
+
+func (cm *configModel) close() tea.Cmd {
+	if cm.embedded {
+		return func() tea.Msg { return settingsClosedMsg{} }
+	}
+	return tea.Quit
 }
 
 func (cm *configModel) Init() tea.Cmd {
 	return textinput.Blink
 }
 
-func (cm *configModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
+func (cm *configModel) startEdit(f field, back int) tea.Cmd {
+	cm.message = ""
+	if f.options != nil { // cycle
+		i := slices.Index(f.options, f.get())
+		f.set(f.options[(i+1)%len(f.options)])
+		return nil
+	}
+	cm.edit, cm.back, cm.state = &f, back, ConfigEditField
+	if f.multi {
+		cm.area.SetValue(f.get())
+		cm.area.Placeholder = f.placeholder
+		return cm.area.Focus()
+	}
+	cm.input.SetValue(f.get())
+	cm.input.Placeholder = f.placeholder
+	cm.input.CursorEnd()
+	return cm.input.Focus()
+}
 
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		if msg.String() == "ctrl+c" {
-			return cm, tea.Quit
-		}
+func (cm *configModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	key, isKey := msg.(tea.KeyMsg)
+	if isKey && key.String() == "ctrl+c" {
+		return cm, tea.Quit
+	}
+
+	switch cm.state {
+	case ConfigEditField, ConfigNewProject:
+		return cm.updateEdit(msg)
+	}
+	if !isKey {
+		return cm, nil
 	}
 
 	switch cm.state {
 	case ConfigMenu:
-		return cm.updateMenu(msg)
-	case ConfigEditBaseFolders:
-		return cm.updateEditField(msg, func(val string) {
-			cm.cfg.BaseFolders = splitList(val)
-		})
-	case ConfigEditProjectPaths:
-		return cm.updateEditField(msg, func(val string) {
-			cm.cfg.ProjectPaths = splitList(val)
-		})
-	case ConfigEditMaxConcurrent:
-		return cm.updateEditField(msg, func(val string) {
-			if n, err := strconv.Atoi(val); err == nil && n > 0 {
-				cm.cfg.MaxConcurrent = n
-			}
-		})
-	case ConfigProjectList:
-		return cm.updateProjectList(msg)
-	case ConfigProjectEdit:
-		return cm.updateProjectEdit(msg)
-	case ConfigProjectEditField:
-		cm.input, cmd = cm.input.Update(msg)
-		switch msg := msg.(type) {
-		case tea.KeyMsg:
-			switch msg.String() {
-			case "enter":
-				cm.saveProjectField()
-				cm.state = ConfigProjectEdit
-			case "esc":
-				cm.state = ConfigProjectEdit
-			}
-		}
-		return cm, cmd
-	}
-
-	return cm, nil
-}
-
-func (cm *configModel) updateMenu(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
+		fs := cm.globalFields()
+		n := len(fs) + 2 // + manage projects, save & exit
+		switch key.String() {
 		case "q", "esc":
-			return cm, tea.Quit
+			return cm, cm.close()
 		case "up", "k":
-			if cm.cursor > 0 {
-				cm.cursor--
-			}
+			cm.cursor = max(cm.cursor-1, 0)
 		case "down", "j":
-			if cm.cursor < 4 {
-				cm.cursor++
-			}
+			cm.cursor = min(cm.cursor+1, n-1)
 		case "enter":
-			switch cm.cursor {
-			case 0: // Edit base folders
-				cm.input.SetValue(strings.Join(cm.cfg.BaseFolders, ", "))
-				cm.input.CursorEnd()
-				cm.state = ConfigEditBaseFolders
-			case 1: // Edit extra project paths
-				cm.input.SetValue(strings.Join(cm.cfg.ProjectPaths, ", "))
-				cm.input.CursorEnd()
-				cm.state = ConfigEditProjectPaths
-			case 2: // Edit max concurrent
-				cm.input.SetValue(strconv.Itoa(cm.cfg.MaxConcurrent))
-				cm.input.CursorEnd()
-				cm.state = ConfigEditMaxConcurrent
-			case 3: // Manage projects
-				cm.state = ConfigProjectList
-				cm.projectCursor = 0
-			case 4: // Save & exit
-				err := config.SaveConfig(cm.configPath, cm.cfg)
-				if err != nil {
+			switch {
+			case cm.cursor < len(fs):
+				return cm, cm.startEdit(fs[cm.cursor], ConfigMenu)
+			case cm.cursor == len(fs):
+				cm.state, cm.projectCursor, cm.message = ConfigProjectList, 0, ""
+			default:
+				if err := config.SaveConfig(cm.configPath, cm.cfg); err != nil {
 					cm.message = "Error: " + err.Error()
 				} else {
-					cm.message = "Saved!"
-					return cm, tea.Quit
+					return cm, cm.close()
 				}
 			}
 		}
-	}
-	return cm, nil
-}
 
-func (cm *configModel) updateEditField(msg tea.Msg, apply func(string)) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "enter":
-			apply(cm.input.Value())
-			cm.message = "Updated"
-			cm.state = ConfigMenu
-			return cm, nil
-		case "esc":
-			cm.state = ConfigMenu
-			return cm, nil
-		}
-	}
-	cm.input, cmd = cm.input.Update(msg)
-	return cm, cmd
-}
-
-func (cm *configModel) updateProjectList(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
+	case ConfigProjectList:
+		switch key.String() {
 		case "esc":
 			cm.state = ConfigMenu
 		case "up", "k":
-			if cm.projectCursor > 0 {
-				cm.projectCursor--
-			}
+			cm.projectCursor = max(cm.projectCursor-1, 0)
 		case "down", "j":
-			if cm.projectCursor < len(cm.projectNames) {
-				cm.projectCursor++
-			}
+			cm.projectCursor = min(cm.projectCursor+1, len(cm.projectNames))
 		case "enter":
 			if cm.projectCursor < len(cm.projectNames) {
-				// Edit existing project
-				cm.editingProject = cm.projectNames[cm.projectCursor]
-				cm.fieldCursor = 0
-				cm.state = ConfigProjectEdit
+				cm.editingProject, cm.fieldCursor, cm.state, cm.message = cm.projectNames[cm.projectCursor], 0, ConfigProjectEdit, ""
 			} else {
-				// Add new project (last item)
+				cm.edit, cm.back, cm.state = nil, ConfigProjectList, ConfigNewProject
 				cm.input.SetValue("")
-				cm.input.Placeholder = "project-name"
-				cm.editingField = "new_project"
-				cm.state = ConfigProjectEditField
+				cm.input.Placeholder = "project name (folder name, as in the project list)"
+				return cm, cm.input.Focus()
 			}
 		case "d":
 			if cm.projectCursor < len(cm.projectNames) {
 				name := cm.projectNames[cm.projectCursor]
 				delete(cm.cfg.Projects, name)
 				cm.refreshProjectNames()
-				if cm.projectCursor >= len(cm.projectNames) && cm.projectCursor > 0 {
-					cm.projectCursor--
-				}
+				cm.projectCursor = min(cm.projectCursor, len(cm.projectNames))
 				cm.message = "Deleted " + name
 			}
+		}
+
+	case ConfigProjectEdit:
+		fs := cm.projectFields(cm.editingProject)
+		switch key.String() {
+		case "esc":
+			cm.state, cm.message = ConfigProjectList, ""
+		case "up", "k":
+			cm.fieldCursor = max(cm.fieldCursor-1, 0)
+		case "down", "j":
+			cm.fieldCursor = min(cm.fieldCursor+1, len(fs)-1)
+		case "enter":
+			return cm, cm.startEdit(fs[cm.fieldCursor], ConfigProjectEdit)
+		case "w":
+			cm.message = cm.saveToRepo(cm.editingProject)
 		}
 	}
 	return cm, nil
 }
 
-func (cm *configModel) updateProjectEdit(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "esc":
-			cm.state = ConfigProjectList
-		case "up", "k":
-			if cm.fieldCursor > 0 {
-				cm.fieldCursor--
+// saveToRepo writes the project's local overrides to its drupal-updater.yaml, like the desktop "Save to repo".
+func (cm *configModel) saveToRepo(name string) string {
+	path, ok := cm.projectPath(name)
+	if !ok {
+		return "✗ project not found in the project folders"
+	}
+	if err := config.SaveProjectFile(path, cm.cfg.Projects[name]); err != nil {
+		return "✗ " + err.Error()
+	}
+	return "✓ wrote " + filepath.Join(path, config.ProjectFile) + " — commit it"
+}
+
+func (cm *configModel) updateEdit(msg tea.Msg) (tea.Model, tea.Cmd) {
+	multi := cm.edit != nil && cm.edit.multi
+	if key, ok := msg.(tea.KeyMsg); ok {
+		done := key.String() == "enter" && !multi || key.String() == "ctrl+s"
+		if key.String() == "esc" {
+			cm.state = cm.back
+			cm.input.Blur()
+			cm.area.Blur()
+			return cm, nil
+		}
+		if done {
+			val := cm.input.Value()
+			if multi {
+				val = cm.area.Value()
 			}
-		case "down", "j":
-			if cm.fieldCursor < 3 {
-				cm.fieldCursor++
+			if cm.state == ConfigNewProject {
+				if name := strings.TrimSpace(val); name != "" {
+					if _, exists := cm.cfg.Projects[name]; !exists {
+						cm.cfg.Projects[name] = config.ProjectConfig{} // empty = branch defaults
+					}
+					cm.refreshProjectNames()
+					cm.editingProject, cm.fieldCursor, cm.back = name, 0, ConfigProjectEdit
+				}
+			} else {
+				cm.edit.set(val)
+				cm.message = "Updated " + cm.edit.label + " (save & exit to keep)"
 			}
-		case "enter":
-			pc := cm.cfg.Projects[cm.editingProject]
-			pc.MergeWithDefaults()
-			switch cm.fieldCursor {
-			case 0:
-				cm.input.SetValue(pc.GitStartBranch)
-				cm.editingField = "git_start_branch"
-				cm.input.CursorEnd()
-				cm.state = ConfigProjectEditField
-			case 1:
-				cm.input.SetValue(pc.GitNewBranchPattern)
-				cm.editingField = "git_new_branch_pattern"
-				cm.input.CursorEnd()
-				cm.state = ConfigProjectEditField
-			case 2:
-				cm.input.SetValue(strings.Join(pc.IgnoredPackages, ", "))
-				cm.editingField = "ignored_packages"
-				cm.input.CursorEnd()
-				cm.state = ConfigProjectEditField
-			case 3:
-				cm.input.SetValue(strings.Join(pc.SmokePaths, ", "))
-				cm.editingField = "smoke_paths"
-				cm.input.CursorEnd()
-				cm.state = ConfigProjectEditField
-			}
+			cm.state = cm.back
+			cm.input.Blur()
+			cm.area.Blur()
+			return cm, nil
 		}
 	}
-	return cm, nil
+	var cmd tea.Cmd
+	if multi {
+		cm.area, cmd = cm.area.Update(msg)
+	} else {
+		cm.input, cmd = cm.input.Update(msg)
+	}
+	return cm, cmd
 }
 
 // splitList turns "a, b,,c" into [a b c]; nil when empty.
@@ -280,37 +413,6 @@ func splitList(val string) []string {
 	return out
 }
 
-func (cm *configModel) saveProjectField() {
-	val := cm.input.Value()
-
-	if cm.editingField == "new_project" {
-		if val != "" {
-			if cm.cfg.Projects == nil {
-				cm.cfg.Projects = make(map[string]config.ProjectConfig)
-			}
-			cm.cfg.Projects[val] = config.DefaultProjectConfig()
-			cm.refreshProjectNames()
-			cm.editingProject = val
-			cm.fieldCursor = 0
-			cm.state = ConfigProjectEdit
-		}
-		return
-	}
-
-	pc := cm.cfg.Projects[cm.editingProject]
-	switch cm.editingField {
-	case "git_start_branch":
-		pc.GitStartBranch = val
-	case "git_new_branch_pattern":
-		pc.GitNewBranchPattern = val
-	case "ignored_packages":
-		pc.IgnoredPackages = splitList(val)
-	case "smoke_paths":
-		pc.SmokePaths = splitList(val)
-	}
-	cm.cfg.Projects[cm.editingProject] = pc
-}
-
 // writeList renders items with the cursor marker and highlight on the item at cursor.
 func writeList(s *strings.Builder, items []string, cursor int) {
 	for i, item := range items {
@@ -322,90 +424,102 @@ func writeList(s *strings.Builder, items []string, cursor int) {
 	}
 }
 
+func shown(f field) string {
+	v := f.get()
+	if f.show != nil {
+		v = f.show()
+	}
+	if f.multi && f.show == nil && strings.Contains(v, "\n") {
+		v = strings.SplitN(v, "\n", 2)[0] + " …"
+	}
+	if v == "" {
+		return helpStyle.Render(f.placeholder)
+	}
+	return lipgloss.NewStyle().Foreground(dimWhite).Render(v)
+}
+
 func (cm *configModel) View() string {
 	var s strings.Builder
-
-	s.WriteString("\n")
-	s.WriteString(titleStyle.Render("  ◆ Drupal Updater — Configuration"))
-	s.WriteString("\n\n")
+	s.WriteString("\n" + titleStyle.Render("  ✦ Drupal Updater — Settings") + "\n\n")
 
 	switch cm.state {
 	case ConfigMenu:
-		items := []string{
-			fmt.Sprintf("Base folders: %s", lipgloss.NewStyle().Foreground(dimWhite).Render(strings.Join(cm.cfg.BaseFolders, ", "))),
-			fmt.Sprintf("Extra project paths: %s", lipgloss.NewStyle().Foreground(dimWhite).Render(strings.Join(cm.cfg.ProjectPaths, ", "))),
-			fmt.Sprintf("Max concurrent: %s", lipgloss.NewStyle().Foreground(dimWhite).Render(strconv.Itoa(cm.cfg.MaxConcurrent))),
-			fmt.Sprintf("Manage projects (%d configured)", len(cm.cfg.Projects)),
-			"Save & exit",
+		fs := cm.globalFields()
+		section := ""
+		for i, f := range fs {
+			if f.section != section {
+				section = f.section
+				s.WriteString("\n" + subtitleStyle.Render("  "+section) + "\n")
+			}
+			writeLine(&s, f.label+": "+shown(f), i == cm.cursor)
 		}
-		writeList(&s, items, cm.cursor)
-		s.WriteString("\n  " + helpStyle.Render("Claude model/prompt/tools: use the desktop app Settings or edit ~/.config/drupal-updater/config.yaml"))
-		if cm.message != "" {
-			s.WriteString("\n  " + progressStyle.Render(cm.message))
-		}
-		s.WriteString("\n\n")
-		s.WriteString("  " + helpKey("enter", "edit") + "  " + helpKey("esc/q", "quit without saving"))
 		s.WriteString("\n")
+		writeLine(&s, fmt.Sprintf("Project overrides (%d) →", len(cm.cfg.Projects)), cm.cursor == len(fs))
+		writeLine(&s, "Save & exit", cm.cursor == len(fs)+1)
+		cm.footer(&s, helpKey("enter", "edit / toggle")+"  "+helpKey("j/k", "navigate")+"  "+helpKey("esc/q", "quit without saving"))
 
 	case ConfigProjectList:
-		s.WriteString(subtitleStyle.Render("  Projects:") + "\n\n")
+		s.WriteString(subtitleStyle.Render("  Project overrides") + "  " + helpStyle.Render("local; a committed "+config.ProjectFile+" wins per field") + "\n\n")
 		writeList(&s, append(append([]string(nil), cm.projectNames...), "+ Add project"), cm.projectCursor)
-		if cm.message != "" {
-			s.WriteString("\n  " + progressStyle.Render(cm.message))
-		}
-		s.WriteString("\n\n  " + helpKey("enter", "edit") + "  " + helpKey("d", "delete") + "  " + helpKey("esc", "back"))
-		s.WriteString("\n")
+		cm.footer(&s, helpKey("enter", "edit")+"  "+helpKey("d", "delete")+"  "+helpKey("esc", "back"))
 
 	case ConfigProjectEdit:
-		pc := cm.cfg.Projects[cm.editingProject]
-		pc.MergeWithDefaults() // show what a run would use
-		value := func(v string) string { return lipgloss.NewStyle().Foreground(dimWhite).Render(v) }
-		orNone := func(l []string) string {
-			if len(l) == 0 {
-				return "(none)"
+		eff, local, repoFile := cm.effective(cm.editingProject) // show what a run would use
+		s.WriteString(subtitleStyle.Render("  Project: "+cm.editingProject) + "\n")
+		if repoFile {
+			s.WriteString("  " + progressStyle.Render(config.ProjectFile+" in the repo wins per field; you edit the local values.") + "\n")
+		}
+		s.WriteString("\n")
+		effVals := []string{eff.GitStartBranch, eff.GitNewBranchPattern, orText(eff.GitMergeTarget, "the start branch"), eff.GitCommitMessage,
+			strings.Join(eff.IgnoredPackages, ", "), strings.Join(eff.SmokePaths, ", "), firstLine(eff.ClaudeInstructions)}
+		locVals := []string{local.GitStartBranch, local.GitNewBranchPattern, orText(local.GitMergeTarget, "the start branch"), local.GitCommitMessage,
+			strings.Join(local.IgnoredPackages, ", "), strings.Join(local.SmokePaths, ", "), firstLine(local.ClaudeInstructions)}
+		for i, f := range cm.projectFields(cm.editingProject) {
+			v := lipgloss.NewStyle().Foreground(dimWhite).Render(orText(effVals[i], "(none)"))
+			switch {
+			case effVals[i] != locVals[i]:
+				v += progressStyle.Render("  (repo file; local: " + orText(locVals[i], "(none)") + ")")
+			case f.get() == "":
+				v += helpStyle.Render("  (inherited)")
 			}
-			return strings.Join(l, ", ")
+			writeLine(&s, f.label+": "+v, i == cm.fieldCursor)
 		}
-		// order must match the fieldCursor cases in updateProjectEdit
-		items := []string{
-			"Start branch: " + value(pc.GitStartBranch),
-			"New branch pattern: " + value(pc.GitNewBranchPattern),
-			"Ignored packages: " + value(orNone(pc.IgnoredPackages)),
-			"Smoke-test paths: " + value(orNone(pc.SmokePaths)),
-		}
-		s.WriteString(subtitleStyle.Render("  Project: "+cm.editingProject) + "\n\n")
-		writeList(&s, items, cm.fieldCursor)
-		s.WriteString("\n  " + helpKey("enter", "edit") + "  " + helpKey("esc", "back"))
-		s.WriteString("\n")
+		cm.footer(&s, helpKey("enter", "edit")+"  "+helpKey("w", "save to repo")+"  "+helpKey("esc", "back"))
 
-	case ConfigEditBaseFolders:
-		s.WriteString(subtitleStyle.Render("  Base folders (comma-separated, each scanned one level deep):") + "\n\n")
-		s.WriteString("  " + cm.input.View() + "\n\n")
-		s.WriteString("  " + helpKey("enter", "save") + "  " + helpKey("esc", "cancel"))
-		s.WriteString("\n")
-
-	case ConfigEditProjectPaths:
-		s.WriteString(subtitleStyle.Render("  Extra project paths (comma-separated, single projects outside the base folders):") + "\n\n")
-		s.WriteString("  " + cm.input.View() + "\n\n")
-		s.WriteString("  " + helpKey("enter", "save") + "  " + helpKey("esc", "cancel"))
-		s.WriteString("\n")
-
-	case ConfigEditMaxConcurrent:
-		s.WriteString(subtitleStyle.Render("  Max concurrent jobs:") + "\n\n")
-		s.WriteString("  " + cm.input.View() + "\n\n")
-		s.WriteString("  " + helpKey("enter", "save") + "  " + helpKey("esc", "cancel"))
-		s.WriteString("\n")
-
-	case ConfigProjectEditField:
-		label := cm.editingField
-		if label == "new_project" {
-			label = "New project name"
+	case ConfigEditField, ConfigNewProject:
+		label := "New project"
+		if cm.edit != nil {
+			label = cm.edit.label
 		}
 		s.WriteString(subtitleStyle.Render("  "+label+":") + "\n\n")
-		s.WriteString("  " + cm.input.View() + "\n\n")
-		s.WriteString("  " + helpKey("enter", "save") + "  " + helpKey("esc", "cancel"))
+		if cm.edit != nil && cm.edit.multi {
+			s.WriteString(cm.area.View() + "\n\n  " + helpKey("ctrl+s", "save") + "  " + helpKey("esc", "cancel"))
+		} else {
+			s.WriteString("  " + cm.input.View() + "\n\n  " + helpKey("enter", "save") + "  " + helpKey("esc", "cancel"))
+		}
 		s.WriteString("\n")
 	}
-
 	return s.String()
+}
+
+func firstLine(v string) string {
+	if before, _, ok := strings.Cut(v, "\n"); ok {
+		return before + " …"
+	}
+	return v
+}
+
+func writeLine(s *strings.Builder, item string, selected bool) {
+	marker := "  "
+	if selected {
+		marker = cursorStyle.Render("▸ ")
+	}
+	s.WriteString("  " + marker + item + "\n")
+}
+
+func (cm *configModel) footer(s *strings.Builder, keys string) {
+	if cm.message != "" {
+		s.WriteString("\n  " + progressStyle.Render(cm.message))
+	}
+	s.WriteString("\n\n  " + keys + "\n")
 }

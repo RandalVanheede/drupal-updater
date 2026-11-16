@@ -11,7 +11,7 @@ pkg-config --exists webkit2gtk-4.1 2>/dev/null && TAGS="-tags webkit2_41" # Ubun
 rm -rf "$BIN/$PKG"
 mkdir -p "$BIN/$PKG"
 mv "$BIN/drupal-updater-desktop" "$BIN/$PKG/"
-go build -o "$BIN/$PKG/drupal-updater" .
+go build -ldflags "-X main.version=${VERSION:-dev}" -o "$BIN/$PKG/drupal-updater" .
 cp desktop/build/appicon.png "$BIN/$PKG/drupal-updater.png"
 cat > "$BIN/$PKG/install.sh" <<'INSTALL'
 #!/bin/sh

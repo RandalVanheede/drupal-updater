@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,7 +37,15 @@ type Config struct {
 	ClaudePermissionMode string                   `yaml:"claude_permission_mode,omitempty" json:"ClaudePermissionMode"` // default dontAsk
 	ClaudeTimeoutMinutes int                      `yaml:"claude_timeout_minutes,omitempty" json:"ClaudeTimeoutMinutes"` // default 60
 	ExcludedProjects     []string                 `yaml:"excluded_projects" json:"ExcludedProjects"`
+	Defaults             ProjectConfig            `yaml:"defaults,omitempty" json:"Defaults"` // for every project, under its own projects: entry
 	Projects             map[string]ProjectConfig `yaml:"projects" json:"Projects"`
+}
+
+// Project is a project's local settings: its projects: entry over the global defaults.
+func (c *Config) Project(name string) ProjectConfig {
+	pc := c.Defaults
+	overlay(&pc, c.Projects[name])
+	return pc
 }
 
 // DefaultCommitMessage is the commit made from a run's changes before its merge request.
@@ -67,7 +76,7 @@ func (pc *ProjectConfig) MergeWithDefaults() {
 }
 
 // ForProject returns a project's effective settings: the repo's drupal-updater.yaml wins per field,
-// the local config.yaml entry fills the gaps, then defaults. A broken repo file is logged and skipped.
+// the local settings (Config.Project) fill the gaps, then built-in defaults. A broken repo file is logged and skipped.
 func ForProject(local ProjectConfig, projectPath string) ProjectConfig {
 	pc := local
 	if data, err := os.ReadFile(filepath.Join(projectPath, ProjectFile)); err == nil {
@@ -75,31 +84,45 @@ func ForProject(local ProjectConfig, projectPath string) ProjectConfig {
 		if err := yaml.Unmarshal(data, &repo); err != nil {
 			logging.Error("ignoring %s in %s: %v", ProjectFile, projectPath, err)
 		} else {
-			pick := func(dst *string, v string) {
-				if v != "" {
-					*dst = v
-				}
-			}
-			pick(&pc.GitStartBranch, repo.GitStartBranch)
-			pick(&pc.GitNewBranchPattern, repo.GitNewBranchPattern)
-			pick(&pc.ClaudeInstructions, repo.ClaudeInstructions)
-			pick(&pc.GitMergeTarget, repo.GitMergeTarget)
-			pick(&pc.GitCommitMessage, repo.GitCommitMessage)
-			if repo.IgnoredPackages != nil {
-				pc.IgnoredPackages = repo.IgnoredPackages
-			}
-			if repo.SmokePaths != nil {
-				pc.SmokePaths = repo.SmokePaths
-			}
+			overlay(&pc, repo)
 		}
 	}
 	pc.MergeWithDefaults()
 	return pc
 }
 
-// SaveProjectFile writes pc as the project's drupal-updater.yaml, for the team to commit.
+// overlay copies every field src sets onto dst.
+func overlay(dst *ProjectConfig, src ProjectConfig) {
+	pick := func(d *string, v string) {
+		if v != "" {
+			*d = v
+		}
+	}
+	pick(&dst.GitStartBranch, src.GitStartBranch)
+	pick(&dst.GitNewBranchPattern, src.GitNewBranchPattern)
+	pick(&dst.ClaudeInstructions, src.ClaudeInstructions)
+	pick(&dst.GitMergeTarget, src.GitMergeTarget)
+	pick(&dst.GitCommitMessage, src.GitCommitMessage)
+	if src.IgnoredPackages != nil {
+		dst.IgnoredPackages = src.IgnoredPackages
+	}
+	if src.SmokePaths != nil {
+		dst.SmokePaths = src.SmokePaths
+	}
+}
+
+// SaveProjectFile writes pc's settings into the project's drupal-updater.yaml, for the team to commit.
+// Settings already in the file that pc leaves empty are kept.
 func SaveProjectFile(projectPath string, pc ProjectConfig) error {
-	data, err := yaml.Marshal(pc)
+	path := filepath.Join(projectPath, ProjectFile)
+	var merged ProjectConfig
+	if data, err := os.ReadFile(path); err == nil {
+		if err := yaml.Unmarshal(data, &merged); err != nil {
+			return fmt.Errorf("%s does not parse, fix it first: %v", ProjectFile, err)
+		}
+	}
+	overlay(&merged, pc)
+	data, err := yaml.Marshal(merged)
 	if err != nil {
 		return err
 	}

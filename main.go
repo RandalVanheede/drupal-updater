@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"drupal-updater/api"
 	"drupal-updater/config"
@@ -15,6 +16,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+var version = "dev" // set by CI: -ldflags "-X main.version=v1.2.3"
 
 func main() {
 	// git/ddev guard behind the shims of a Claude run (see executor/guard.go)
@@ -87,12 +90,20 @@ func main() {
 
 	logging.Info("Found %d projects", len(projects))
 
-	m := ui.New(cfg, projects)
+	m := ui.New(cfg, projects, configPath, version)
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		logging.Error("UI error: %v", err)
 		fmt.Fprintf(os.Stderr, "Error running program: %v\n", err)
 		os.Exit(1)
+	}
+	if cmd := m.Restart(); cmd != nil { // updated: continue in the new version
+		logging.Info("restarting into %s", cmd.Path)
+		logging.Close()
+		if err := syscall.Exec(cmd.Path, append([]string{cmd.Path}, os.Args[1:]...), os.Environ()); err != nil {
+			fmt.Fprintf(os.Stderr, "Updated, but restarting failed (start drupal-updater again): %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	logging.Info("drupal-updater exiting normally")

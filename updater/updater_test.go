@@ -39,7 +39,28 @@ func TestVerify(t *testing.T) {
 }
 
 func TestAssetSuffix(t *testing.T) {
-	if assetSuffix("darwin", "arm64") != "-macos-arm64.dmg" || assetSuffix("linux", "amd64") != "linux-x86_64.tar.gz" || assetSuffix("darwin", "amd64") != "" {
+	if assetSuffix("darwin", "arm64", false) != "-macos-arm64.dmg" || assetSuffix("linux", "amd64", false) != "linux-x86_64.tar.gz" || assetSuffix("darwin", "amd64", false) != "" ||
+		assetSuffix("darwin", "amd64", true) != "drupal-updater-darwin-amd64" || assetSuffix("linux", "arm64", true) != "linux-aarch64.tar.gz" {
 		t.Fatal("wrong asset mapping")
+	}
+}
+
+func TestReplaceBinary(t *testing.T) {
+	dir := t.TempDir()
+	exe, file := filepath.Join(dir, "drupal-updater"), filepath.Join(dir, "download")
+	os.WriteFile(exe, []byte("old"), 0o755)
+	os.WriteFile(file, []byte("new"), 0o644)
+	cmd, err := replaceBinary(file, exe)
+	if err != nil || cmd.Path != exe {
+		t.Fatalf("cmd %v, err %v", cmd, err)
+	}
+	if data, _ := os.ReadFile(exe); string(data) != "new" {
+		t.Fatalf("binary not replaced: %q", data)
+	}
+	if st, _ := os.Stat(exe); st.Mode().Perm()&0o100 == 0 {
+		t.Fatal("replaced binary is not executable")
+	}
+	if _, err := os.Stat(exe + ".new"); !os.IsNotExist(err) {
+		t.Fatal("staging file left behind")
 	}
 }

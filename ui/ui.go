@@ -3,12 +3,16 @@ package ui
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"drupal-updater/config"
 	"drupal-updater/discovery"
 	"drupal-updater/executor"
 	"drupal-updater/logging"
+	"drupal-updater/updater"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -22,6 +26,7 @@ const (
 	StateRunning
 	StateDetail
 	StateConfirmBranch
+	StateSettings
 )
 
 type model struct {
@@ -66,7 +71,36 @@ type model struct {
 	editingBranch  bool
 	confirmDone    bool
 	confirmResults map[string]string
+
+	// Merge requests after the rename (see executor.MergeRequest)
+	summaries map[string]string // last successful run's summary, used as MR description
+	mrStatus  map[string]string // project -> progress, URL or error
+	mergeChan chan tea.Msg      // mergeMsg and Claude screens of conflict sessions
+	merging   int               // merge requests still running
+	mrCancels map[string]context.CancelFunc
+
+	configPath string
+	version    string
+	repoFile   map[string]bool  // project has a committed drupal-updater.yaml
+	update     *updater.Release // newer release, from the start-up check
+	updateMsg  string           // install progress or error
+	restart    *exec.Cmd        // set after an update: main replaces the process with it
+	settings   *configModel     // open settings screen (StateSettings)
 }
+
+type updateMsg struct {
+	r   *updater.Release
+	cmd *exec.Cmd // set when an install finished
+	err error
+}
+
+// mergeMsg is progress (done=false) or the result of one project's merge request.
+type mergeMsg struct {
+	project, text string
+	done          bool
+}
+
+func waitForMerge(c chan tea.Msg) tea.Cmd { return func() tea.Msg { return <-c } }
 
 // Color palette
 var (
@@ -161,7 +195,8 @@ var (
 			Italic(true)
 )
 
-func New(cfg *config.Config, projects []discovery.Project) *model {
+// New builds the TUI. configPath is where mode changes are saved; version ("dev" for local builds) drives the update check.
+func New(cfg *config.Config, projects []discovery.Project, configPath, version string) *model {
 	bi := textinput.New()
 	bi.CharLimit = 200
 	bi.Width = 40
@@ -178,24 +213,70 @@ func New(cfg *config.Config, projects []discovery.Project) *model {
 		state:          StateList,
 		branchInput:    bi,
 		msgChan:        make(chan executor.StatusUpdate, 100),
+		summaries:      make(map[string]string),
+		mrStatus:       make(map[string]string),
+		mrCancels:      make(map[string]context.CancelFunc),
+		mergeChan:      make(chan tea.Msg, 100),
 		width:          80,
 		height:         24,
 		branchNames:    make(map[string]string),
 		tempBranches:   make(map[string]string),
 		confirmResults: make(map[string]string),
+		configPath:     configPath,
+		version:        version,
+		repoFile:       make(map[string]bool),
 	}
 
 	for _, p := range projects {
 		m.status[p.Name] = "idle"
 		m.selected[p.Name] = false
+		_, err := os.Stat(filepath.Join(p.Path, config.ProjectFile))
+		m.repoFile[p.Name] = err == nil
 	}
 
 	return m
 }
 
 func (m *model) Init() tea.Cmd {
-	return textinput.Blink
+	v := m.version
+	return tea.Batch(textinput.Blink, func() tea.Msg {
+		r, err := updater.Check(v, true)
+		if err != nil {
+			logging.Error("update check: %v", err)
+		}
+		return updateMsg{r: r}
+	})
 }
+
+// closeSettings reloads the config from disk (so unsaved edits are dropped), applies it and
+// rescans the project folders, then returns to the project list.
+func (m *model) closeSettings() {
+	m.settings, m.state = nil, StateList
+	cfg, err := config.LoadConfig(m.configPath)
+	if err != nil {
+		m.updateMsg = "✗ reloading settings: " + err.Error()
+		return
+	}
+	*m.cfg = *cfg
+	executor.Configure(m.cfg)
+	projects, err := discovery.DiscoverProjects(m.cfg.BaseFolders, m.cfg.ProjectPaths, m.cfg.ExcludedProjects)
+	if err != nil {
+		m.updateMsg = "✗ scanning project folders: " + err.Error()
+		return
+	}
+	m.projects = projects
+	for _, p := range projects {
+		if _, ok := m.status[p.Name]; !ok {
+			m.status[p.Name] = "idle"
+		}
+		_, err := os.Stat(filepath.Join(p.Path, config.ProjectFile))
+		m.repoFile[p.Name] = err == nil
+	}
+	m.cursor, m.scrollOffset = 0, 0
+}
+
+// Restart is the command to replace this process with after an update, or nil.
+func (m *model) Restart() *exec.Cmd { return m.restart }
 
 func waitForActivity(sub chan executor.StatusUpdate) tea.Cmd {
 	return func() tea.Msg {
@@ -218,6 +299,42 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
 		}
+	case settingsClosedMsg:
+		m.closeSettings()
+		return m, nil
+	case updateMsg:
+		switch {
+		case msg.err != nil:
+			m.updateMsg = "✗ update failed: " + msg.err.Error()
+		case msg.cmd != nil:
+			m.restart = msg.cmd
+			return m, tea.Quit
+		default:
+			m.update = msg.r
+		}
+		return m, nil
+	case mergeMsg: // handled in any view, so progress keeps flowing while logs are open
+		m.mrStatus[msg.project] = msg.text
+		m.logs[msg.project] += "merge request: " + msg.text + "\n"
+		if msg.done {
+			m.merging--
+			delete(m.mrCancels, msg.project)
+		}
+		if m.state == StateDetail && msg.project == m.detailProject {
+			m.detailVP.SetContent(m.detailText(m.detailProject))
+		}
+		if m.merging > 0 {
+			return m, waitForMerge(m.mergeChan)
+		}
+		return m, nil
+	case executor.StatusUpdate:
+		if m.merging > 0 && msg.Screen != "" && m.confirmDone { // conflict session screen
+			m.screens[msg.ProjectName] = msg.Screen
+			if m.state == StateDetail && msg.ProjectName == m.detailProject {
+				m.detailVP.SetContent(m.detailText(m.detailProject))
+			}
+			return m, waitForMerge(m.mergeChan)
+		}
 	}
 
 	switch m.state {
@@ -229,6 +346,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m, cmds = m.updateDetail(msg)
 	case StateConfirmBranch:
 		m, cmds, cmd = m.updateConfirmBranch(msg)
+		cmds = append(cmds, cmd)
+	case StateSettings:
+		_, cmd = m.settings.Update(msg)
 		cmds = append(cmds, cmd)
 	}
 
@@ -279,6 +399,9 @@ func (m *model) updateList(msg tea.Msg) (*model, []tea.Cmd) {
 			}
 			return m, nil
 		case " ", "enter":
+			if len(m.projects) == 0 { // possible after the project folders changed in settings
+				return m, nil
+			}
 			pName := m.projects[m.cursor].Name
 			m.selected[pName] = !m.selected[pName]
 			return m, nil
@@ -312,14 +435,32 @@ func (m *model) updateList(msg tea.Msg) (*model, []tea.Cmd) {
 					m.selected[p.Name] = !allSelected
 				}
 				return m, nil
-			case "m": // this session only; the desktop app or config.yaml (update_mode) sets the saved default
+			case "m": // saved, like the desktop toggle
 				if m.cfg.UpdateMode == "disaster" {
 					m.cfg.UpdateMode = "standard"
 				} else {
 					m.cfg.UpdateMode = "disaster"
 				}
 				executor.Configure(m.cfg)
+				if err := config.SaveConfig(m.configPath, m.cfg); err != nil {
+					logging.Error("saving update mode: %v", err)
+				}
 				return m, nil
+			case "S":
+				m.settings = NewConfigModel(m.cfg, m.configPath)
+				m.settings.embedded = true
+				m.state = StateSettings
+				return m, nil
+			case "U":
+				if m.update == nil || !m.update.CanInstall || strings.HasPrefix(m.updateMsg, "Downloading") {
+					return m, nil
+				}
+				m.updateMsg = "Downloading " + m.update.Version + "…"
+				r := m.update
+				return m, []tea.Cmd{func() tea.Msg {
+					cmd, err := updater.Install(r)
+					return updateMsg{cmd: cmd, err: err}
+				}}
 			case "u":
 				logging.Info("Starting execution from StateList")
 				m.state = StateRunning
@@ -414,6 +555,9 @@ func (m *model) applyUpdate(msg executor.StatusUpdate) {
 		return
 	}
 	m.status[msg.ProjectName] = msg.Status
+	if msg.Status == "success" {
+		m.summaries[msg.ProjectName] = msg.Output
+	}
 	if msg.Output != "" {
 		m.logs[msg.ProjectName] += msg.Command + "\n" + msg.Output + "\n"
 	} else {
@@ -493,11 +637,31 @@ func (m *model) updateConfirmBranch(msg tea.Msg) (*model, []tea.Cmd, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q":
+			if m.merging > 0 {
+				return m, cmds, nil // quitting would leave a merge (and maybe its Claude session) half done
+			}
 			if !m.confirmDone {
 				// Cleanup failed/cancelled projects before quitting
 				m.runConfirmation(false)
 			}
 			return m, []tea.Cmd{tea.Quit}, nil
+		case "m", "M":
+			if !m.confirmDone || len(m.selectedProjects) == 0 {
+				break
+			}
+			names := []string{m.selectedProjects[m.branchCursor]}
+			if msg.String() == "M" {
+				names = m.selectedProjects
+			}
+			if cmd := m.startMerges(names); cmd != nil {
+				return m, []tea.Cmd{cmd}, nil
+			}
+		case "x":
+			if m.confirmDone && len(m.selectedProjects) > 0 {
+				if cancel, ok := m.mrCancels[m.selectedProjects[m.branchCursor]]; ok {
+					cancel()
+				}
+			}
 		case "up", "k":
 			if m.branchCursor > 0 {
 				m.branchCursor--
@@ -507,6 +671,16 @@ func (m *model) updateConfirmBranch(msg tea.Msg) (*model, []tea.Cmd, tea.Cmd) {
 				m.branchCursor++
 			}
 		case "d", "enter":
+			if m.confirmDone && msg.String() == "d" && len(m.selectedProjects) > 0 {
+				pName := m.selectedProjects[m.branchCursor]
+				m.detailProject = pName
+				m.prevState = StateConfirmBranch
+				m.state = StateDetail
+				m.detailVP = viewport.New(m.width-4, m.height-6)
+				m.detailVP.SetContent(m.detailText(pName))
+				m.detailVP.GotoBottom()
+				return m, cmds, nil
+			}
 			if !m.confirmDone && len(m.selectedProjects) > 0 {
 				pName := m.selectedProjects[m.branchCursor]
 				if msg.String() == "enter" && m.status[pName] == "success" {
@@ -578,7 +752,7 @@ func (m *model) retryFailed() tea.Cmd {
 			continue
 		}
 
-		pCfg := config.ForProject(m.cfg.Projects[pName], p.Path)
+		pCfg := config.ForProject(m.cfg.Project(pName), p.Path)
 
 		tempBranch := m.tempBranches[pName]
 		startBranch := pCfg.GitStartBranch
@@ -597,6 +771,58 @@ func (m *model) retryFailed() tea.Cmd {
 	return waitForActivity(m.msgChan)
 }
 
+// renamed reports whether a project's temp branch was renamed in the confirmation step.
+func (m *model) renamed(name string) bool {
+	return strings.HasPrefix(m.confirmResults[name], "renamed to ")
+}
+
+// startMerges opens merge requests for the renamed projects among names that have none running or done.
+func (m *model) startMerges(names []string) tea.Cmd {
+	started := false
+	for _, name := range names {
+		p := m.projectByName(name)
+		if p == nil || !m.renamed(name) {
+			continue
+		}
+		if _, busy := m.mrCancels[name]; busy || strings.HasPrefix(m.mrStatus[name], "http") {
+			continue
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		m.mrCancels[name] = cancel
+		m.merging++
+		started = true
+		m.mrStatus[name] = "starting…"
+		pc := config.ForProject(m.cfg.Project(name), p.Path)
+		branch, path, summary, c := m.branchNames[name], p.Path, m.summaries[name], m.mergeChan
+		if summary == "" {
+			summary = "Drupal dependency updates by drupal-updater."
+		}
+		go func() {
+			screens := make(chan executor.StatusUpdate, 10)
+			go func() {
+				for u := range screens {
+					c <- u
+				}
+			}()
+			url, err := executor.MergeRequest(ctx, name, path, branch, pc, summary, func(t string) {
+				c <- mergeMsg{project: name, text: t}
+			}, screens)
+			close(screens)
+			cancel()
+			if err != nil {
+				logging.Error("[%s] merge request failed: %v", name, err)
+				c <- mergeMsg{project: name, text: "✗ " + err.Error(), done: true}
+				return
+			}
+			c <- mergeMsg{project: name, text: url, done: true}
+		}()
+	}
+	if !started {
+		return nil
+	}
+	return waitForMerge(m.mergeChan)
+}
+
 // runConfirmation performs the git rename/cleanup operations.
 // If doRenames is true, successful projects get their temp branch renamed to final branch.
 // Failed/cancelled projects always get cleaned up.
@@ -609,7 +835,7 @@ func (m *model) runConfirmation(doRenames bool) {
 		if p == nil {
 			continue
 		}
-		pCfg := config.ForProject(m.cfg.Projects[pName], p.Path)
+		pCfg := config.ForProject(m.cfg.Project(pName), p.Path)
 
 		tempBranch := m.tempBranches[pName]
 		st := m.status[pName]
@@ -723,7 +949,7 @@ func (m *model) startExecution() {
 		}
 		m.totalJobs++
 
-		pCfg := config.ForProject(m.cfg.Projects[p.Name], p.Path)
+		pCfg := config.ForProject(m.cfg.Project(p.Name), p.Path)
 
 		tempBranch := executor.TempBranch(p.Name)
 		m.tempBranches[p.Name] = tempBranch
@@ -760,10 +986,12 @@ func (m *model) View() string {
 
 	// Header
 	s.WriteString("\n")
-	s.WriteString(titleStyle.Render("  ◆ Drupal Updater"))
+	s.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, titleStyle.Render("  ✦ Drupal Updater"), progressStyle.Render("  "+m.version))) // title has a bottom margin
 	s.WriteString("\n\n")
 
 	switch m.state {
+	case StateSettings:
+		return m.settings.View()
 	case StateList:
 		s.WriteString(subtitleStyle.Render("  Select projects to update:") + "\n")
 		if m.searchQuery != "" {
@@ -803,6 +1031,9 @@ func (m *model) View() string {
 				name = lipgloss.NewStyle().Foreground(dimWhite).Render(name)
 			}
 
+			if m.repoFile[p.Name] {
+				name += progressStyle.Render("  repo config")
+			}
 			s.WriteString(fmt.Sprintf("  %s%s %s\n", cursor, checkbox, name))
 		}
 
@@ -825,8 +1056,15 @@ func (m *model) View() string {
 		s.WriteString(progressStyle.Render(fmt.Sprintf("  %d/%d selected · mode: %s", count, len(m.projects), mode)))
 		s.WriteString("\n\n")
 		s.WriteString("  " + helpKey("u", "update") + "  " + helpKey("a", "toggle all") + "  " + helpKey("space", "toggle") + "  " + helpKey("m", "mode") + "  " + helpKey("q", "quit"))
-		s.WriteString("\n  " + helpKey("type", "search") + "  " + helpKey("esc", "clear search") + "  " + helpKey("hint:", "") + progressStyle.Render("--config to manage settings"))
+		s.WriteString("\n  " + helpKey("S", "settings") + "  " + helpKey("type", "search") + "  " + helpKey("esc", "clear search"))
 		s.WriteString("\n")
+		if m.updateMsg != "" {
+			s.WriteString("\n  " + progressStyle.Render(m.updateMsg) + "\n")
+		} else if m.update != nil && m.update.CanInstall {
+			s.WriteString("\n  " + completedStyle.Render(m.update.Version+" available") + "  " + helpKey("U", "update & restart") + "\n")
+		} else if m.update != nil {
+			s.WriteString("\n  " + completedStyle.Render(m.update.Version+" available: ") + progressStyle.Render(m.update.URL) + "\n")
+		}
 
 	case StateRunning:
 		progress := fmt.Sprintf("%d/%d done", m.doneJobs, m.totalJobs)
@@ -931,6 +1169,18 @@ func (m *model) View() string {
 
 			if m.confirmDone {
 				result := m.confirmResults[pName]
+				if mr := m.mrStatus[pName]; mr != "" {
+					style := progressStyle
+					if strings.HasPrefix(mr, "✗") {
+						style = statusFailedStyle
+					} else if strings.HasPrefix(mr, "http") {
+						style = statusSuccessStyle
+					}
+					if w := m.width - lipgloss.Width(pName) - lipgloss.Width(result) - 14; w > 10 && len([]rune(mr)) > w && !strings.HasPrefix(mr, "http") {
+						mr = string([]rune(mr)[:w-1]) + "…" // one line per project; the full text is in the logs (d)
+					}
+					result += "  " + style.Render("MR: "+mr)
+				}
 				s.WriteString(fmt.Sprintf("  %s%s  %s  %s\n", cursor, statusStr, name,
 					progressStyle.Render(result)))
 			} else if st == "success" {
@@ -955,7 +1205,11 @@ func (m *model) View() string {
 		s.WriteString("\n")
 		if m.confirmDone {
 			s.WriteString(completedStyle.Render("  ✓ Done.") + "\n\n")
-			s.WriteString("  " + helpKey("q", "quit"))
+			if m.merging > 0 {
+				s.WriteString("  " + helpKey("x", "cancel MR") + "  " + helpKey("d", "view logs") + "  " + helpKey("j/k", "navigate") + "  " + progressStyle.Render(fmt.Sprintf("%d merge request(s) running", m.merging)))
+			} else {
+				s.WriteString("  " + helpKey("m", "create MR") + "  " + helpKey("M", "create all MRs") + "  " + helpKey("d", "view logs") + "  " + helpKey("j/k", "navigate") + "  " + helpKey("q", "quit"))
+			}
 		} else {
 			s.WriteString("  " + helpKey("c", "confirm") + "  " + helpKey("r", "retry failed") + "  " + helpKey("enter", "edit branch") + "  " + helpKey("d", "view logs") + "  " + helpKey("j/k", "navigate") + "  " + helpKey("q", "quit & cleanup"))
 		}

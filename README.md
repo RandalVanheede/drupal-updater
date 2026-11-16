@@ -68,11 +68,21 @@ claude_instructions: |
   Never update the search_api_solr config.
 ```
 
-Per field, the repo file wins; the local `projects:` entry only fills fields the file leaves out. A file that does not parse is logged and ignored. It is read from the working tree when a run starts. In the desktop app, Settings → Project Overrides → "Save to repo" writes a project's local overrides into the file for you to commit.
+Per field, the repo file wins; the local `projects:` entry only fills fields the file leaves out. A file that does not parse is logged and ignored. It is read from the working tree when a run starts. In the desktop app, Settings → Project Overrides → "Save to repo" (TUI: `w` on a project) writes a project's local overrides into the file for you to commit; settings already in the file that you have not set locally are kept.
 
 ### Defaults
 
-If a project has no config entry, these defaults apply:
+`defaults:` in config.yaml (desktop: Settings → Branch defaults) applies to every project:
+
+```yaml
+defaults:
+  git_start_branch: develop
+  git_new_branch_pattern: "release/{date}-*"
+  git_merge_target: staging
+  git_commit_message: "Drupal updates {date}"
+```
+
+Per field the order is: the repo's `drupal-updater.yaml`, the project's `projects:` entry, `defaults:`, then these built-in defaults:
 
 | Setting                  | Default                         |
 |--------------------------|---------------------------------|
@@ -92,9 +102,9 @@ After confirming, each renamed branch gets a "Create MR" button ("Create all MRs
 
 Needs [glab](https://gitlab.com/gitlab-org/cli) logged in for every GitLab host (`glab auth login`, and `glab auth login --hostname gitlab.example.com` for self-hosted); glab picks the host from the project's `origin` remote. Git 2.38+ is required for the dry run.
 
-## Auto-update (desktop)
+## Auto-update
 
-The desktop app checks `releases/latest` of this repo on start and daily, and shows a banner when a newer tag exists. "Update & restart" downloads the asset for the platform (macOS arm64 DMG, Linux x86_64/aarch64 tarball), verifies `<asset>.sig` with `updater.PublicKey`, then swaps the `.app` bundle (macOS) or runs `install.sh` (Linux) and restarts. Intel Macs and builds without `updater.PublicKey` only get a link to the release.
+Both apps check for updates; the TUI shows "vX available" under the project list and installs with `U` (macOS: replaces its own binary, so it must be writable; Linux: runs the tarball's `install.sh`), then restarts itself. The desktop app checks `releases/latest` of this repo on start and daily, and shows a banner when a newer tag exists. "Update & restart" downloads the asset for the platform (macOS arm64 DMG, Linux x86_64/aarch64 tarball), verifies `<asset>.sig` with `updater.PublicKey`, then swaps the `.app` bundle (macOS) or runs `install.sh` (Linux) and restarts. Intel Macs and builds without `updater.PublicKey` only get a link to the release.
 
 One-time setup: `go run ./scripts/sign -genkey`, store the private key as the GitHub secret `UPDATE_SIGNING_KEY` and put the public key in `updater.PublicKey`. The release job signs every DMG and tarball with it. Builds get their version from `VERSION` (`VERSION=v1.2.3 scripts/build-dmg.sh`; CI passes the tag); without it the app is `dev` and never updates.
 
@@ -108,7 +118,7 @@ Each match, plus every `project_paths` entry, becomes a selectable project. A pr
 
 ## TUI Flow
 
-1. **List View** — Scrollable list of detected projects with checkboxes. Toggle individual projects with `space`/`enter`, toggle all with `a`, start update with `u`.
+1. **List View** — Scrollable list of detected projects with checkboxes. Toggle individual projects with `space`/`enter`, toggle all with `a`, start update with `u`, switch update mode with `m`, open settings with `S`, install an available update with `U`.
 2. **Running View** — Shows live status per project (`IDLE`, `RUNNING`, `SUCCESS`, `FAILED`) and the live Claude session.
 3. **Confirm View** — Rename each successful temp branch to its final name, or clean up.
 

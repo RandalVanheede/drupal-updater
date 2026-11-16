@@ -83,10 +83,36 @@ func TestForProject(t *testing.T) {
 		t.Fatalf("broken file should fall back to local: %+v", pc)
 	}
 
+	os.Remove(filepath.Join(dir, ProjectFile))
 	if err := SaveProjectFile(dir, ProjectConfig{GitStartBranch: "saved"}); err != nil {
 		t.Fatal(err)
 	}
 	if pc = ForProject(ProjectConfig{}, dir); pc.GitStartBranch != "saved" {
 		t.Fatalf("saved file not read back: %+v", pc)
+	}
+}
+
+func TestProjectDefaults(t *testing.T) {
+	cfg := &Config{Defaults: ProjectConfig{GitStartBranch: "develop", GitMergeTarget: "staging"}, Projects: map[string]ProjectConfig{"a": {GitStartBranch: "main"}}}
+	if pc := cfg.Project("a"); pc.GitStartBranch != "main" || pc.GitMergeTarget != "staging" {
+		t.Fatalf("project entry should win, defaults fill gaps: %+v", pc)
+	}
+	if pc := ForProject(cfg.Project("b"), t.TempDir()); pc.GitStartBranch != "develop" || pc.GitNewBranchPattern != DefaultBranchPattern {
+		t.Fatalf("project without entry: %+v", pc)
+	}
+}
+
+func TestSaveProjectFileKeepsTeamSettings(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, ProjectFile), []byte("git_merge_target: staging\n"), 0o644)
+	if err := SaveProjectFile(dir, ProjectConfig{GitStartBranch: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	if pc := ForProject(ProjectConfig{}, dir); pc.GitMergeTarget != "staging" || pc.GitStartBranch != "main" {
+		t.Fatalf("existing setting lost or new one missing: %+v", pc)
+	}
+	os.WriteFile(filepath.Join(dir, ProjectFile), []byte("git_start_branch: [broken"), 0o644)
+	if SaveProjectFile(dir, ProjectConfig{GitStartBranch: "x"}) == nil {
+		t.Fatal("overwrote a file that does not parse")
 	}
 }

@@ -223,7 +223,7 @@ func cmdStartUpdate(args []string) {
 
 	var jobs []job
 	for _, p := range selectedProjects {
-		pCfg := config.ForProject(cfg.Projects[p.Name], p.Path)
+		pCfg := config.ForProject(cfg.Project(p.Name), p.Path)
 
 		tempBranch := executor.TempBranch(p.Name)
 
@@ -330,7 +330,7 @@ func cmdCleanupBranch(args []string) {
 		fatal(fmt.Sprintf("project not found: %s", projectName))
 	}
 
-	pCfg := config.ForProject(cfg.Projects[projectName], p.Path)
+	pCfg := config.ForProject(cfg.Project(projectName), p.Path)
 
 	tempBranch := executor.TempBranch(projectName)
 

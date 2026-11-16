@@ -6,6 +6,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-11-16
+
+### Added
+- Branch defaults for all projects (`defaults:` in config.yaml, "Branch defaults" in desktop Settings): start branch, final branch pattern, merge request target, commit message. Order: repo `drupal-updater.yaml`, then the project override, then these defaults, then the built-in ones.
+- The TUI now does everything the desktop app does:
+  - merge requests on the confirm screen after renaming (`m` for the selected project, `M` for all, `x` cancels);
+  - settings inside the TUI (`S` on the project list; `--config` still opens them on their own) with the same sections and settings as the desktop: excluded projects, update mode, branch defaults, all Claude settings (allowed tools and prompt in a multi-line editor), per-project Claude instructions, and `w` to save a project's overrides to the repo. Project values show what a run uses and which ones come from the repo file;
+  - auto-update (`U`), the version in the header, a "repo config" marker in the project list, and the update mode toggle (`m`) is saved like on the desktop.
+
+### Fixed
+- "Save to repo" no longer wipes settings already in a project's `drupal-updater.yaml` that are not set locally; it refuses to touch a file that does not parse.
+
+### Changed
+- Desktop Settings regrouped into Projects, Branch defaults, Claude (allowed tools and prompt folded under Advanced) and Project overrides.
+- Dynamate spark logo, cream on navy as on dynamate.be, in the desktop header and as the app icon.
+
 ## [1.0.4] - 2026-11-16
 
 v1.0.3 was tagged but never released (its macOS build failed); its changes ship here.
@@ -54,7 +70,8 @@ First versioned release.
 - Classic mode: the configured shell commands with retries and auto-healing, no Claude.
 - Build scripts for macOS (`scripts/build-dmg.sh`) and Linux amd64/arm64 (`scripts/build-linux.sh`, `scripts/build-linux-docker.sh`), and a CI pipeline that builds them for each release tag.
 
-[Unreleased]: https://github.com/RandalVanheede/drupal-updater/compare/v1.0.4...1.0.x
+[Unreleased]: https://github.com/RandalVanheede/drupal-updater/compare/v1.0.5...1.0.x
+[1.0.5]: https://github.com/RandalVanheede/drupal-updater/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/RandalVanheede/drupal-updater/compare/v1.0.2...v1.0.4
 [1.0.2]: https://github.com/RandalVanheede/drupal-updater/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/RandalVanheede/drupal-updater/compare/v1.0.0...v1.0.1

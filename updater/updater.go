@@ -31,11 +31,15 @@ type Release struct {
 	URL        string `json:"url"`        // release page
 	CanInstall bool   `json:"canInstall"` // signed asset for this OS/CPU and a public key to check it
 	asset, sig string
+	tui        bool
 }
 
 // assetSuffix is the release asset this build installs from (see .github/workflows/build.yml).
-func assetSuffix(goos, goarch string) string {
+// The Linux tarball holds both apps; on macOS the TUI is a bare binary.
+func assetSuffix(goos, goarch string, tui bool) string {
 	switch {
+	case tui && goos == "darwin":
+		return "drupal-updater-darwin-" + goarch
 	case goos == "darwin" && goarch == "arm64":
 		return "-macos-arm64.dmg"
 	case goos == "linux" && goarch == "amd64":
@@ -47,7 +51,8 @@ func assetSuffix(goos, goarch string) string {
 }
 
 // Check returns the latest release if it is newer than current, else nil. A dev build never updates.
-func Check(current string) (*Release, error) {
+// tui picks the terminal app's asset instead of the desktop app's.
+func Check(current string, tui bool) (*Release, error) {
 	if _, ok := parse(current); !ok {
 		return nil, nil
 	}
@@ -73,8 +78,8 @@ func Check(current string) (*Release, error) {
 	if !newer(gh.Tag, current) {
 		return nil, nil
 	}
-	r := &Release{Version: gh.Tag, URL: gh.URL}
-	if suffix := assetSuffix(runtime.GOOS, runtime.GOARCH); suffix != "" {
+	r := &Release{Version: gh.Tag, URL: gh.URL, tui: tui}
+	if suffix := assetSuffix(runtime.GOOS, runtime.GOARCH, tui); suffix != "" {
 		for _, a := range gh.Assets {
 			if strings.HasSuffix(a.Name, suffix) {
 				r.asset = a.URL
@@ -180,10 +185,37 @@ func Install(r *Release) (*exec.Cmd, error) {
 	if err := Verify(file, string(sig), PublicKey); err != nil {
 		return nil, err
 	}
-	if runtime.GOOS == "darwin" {
+	switch {
+	case runtime.GOOS == "darwin" && r.tui:
+		exe, err := os.Executable()
+		if err != nil {
+			return nil, err
+		}
+		if exe, err = filepath.EvalSymlinks(exe); err != nil {
+			return nil, err
+		}
+		return replaceBinary(file, exe)
+	case runtime.GOOS == "darwin":
 		return installDarwin(file, dir)
 	}
-	return installLinux(file, dir)
+	return installLinux(file, dir, r.tui)
+}
+
+// replaceBinary swaps exe (the running TUI) for file, the macOS TUI release asset.
+func replaceBinary(file, exe string) (*exec.Cmd, error) {
+	staged := exe + ".new"
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(staged, data, 0o755); err != nil {
+		return nil, fmt.Errorf("cannot write next to %s: %v", exe, err)
+	}
+	if err := os.Rename(staged, exe); err != nil { // atomic: the running process keeps its old inode
+		os.Remove(staged)
+		return nil, err
+	}
+	return exec.Command(exe), nil
 }
 
 func run(name string, args ...string) error {
@@ -230,8 +262,8 @@ func installDarwin(dmg, dir string) (*exec.Cmd, error) {
 	return exec.Command("open", "-n", app), nil
 }
 
-// installLinux runs the tarball's install.sh (installs into ~/.local/bin).
-func installLinux(tarball, dir string) (*exec.Cmd, error) {
+// installLinux runs the tarball's install.sh (installs both apps into ~/.local/bin).
+func installLinux(tarball, dir string, tui bool) (*exec.Cmd, error) {
 	if err := run("tar", "-xzf", tarball, "-C", dir); err != nil {
 		return nil, err
 	}
@@ -243,5 +275,8 @@ func installLinux(tarball, dir string) (*exec.Cmd, error) {
 		return nil, err
 	}
 	home, _ := os.UserHomeDir()
+	if tui {
+		return exec.Command(filepath.Join(home, ".local", "bin", "drupal-updater")), nil
+	}
 	return exec.Command(filepath.Join(home, ".local", "bin", "drupal-updater-desktop")), nil
 }

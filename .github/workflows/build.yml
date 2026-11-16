@@ -36,8 +36,8 @@ jobs:
       - run: VERSION="$GITHUB_REF_NAME" scripts/build-dmg.sh
       - name: TUI binaries
         run: |
-          GOARCH=arm64 go build -o dist/drupal-updater-darwin-arm64 .
-          GOARCH=amd64 go build -o dist/drupal-updater-darwin-amd64 .
+          GOARCH=arm64 go build -ldflags "-X main.version=$GITHUB_REF_NAME" -o dist/drupal-updater-darwin-arm64 .
+          GOARCH=amd64 go build -ldflags "-X main.version=$GITHUB_REF_NAME" -o dist/drupal-updater-darwin-amd64 .
           mv desktop/build/bin/Drupal-Updater.dmg "dist/Drupal-Updater-${GITHUB_REF_NAME}-macos-arm64.dmg"
       - uses: actions/upload-artifact@v7
         with:
@@ -82,7 +82,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Sign assets for the auto-updater
-        run: go run ./scripts/sign dist/*.dmg dist/*.tar.gz
+        run: go run ./scripts/sign dist/*.dmg dist/*.tar.gz dist/drupal-updater-darwin-*
         env:
           UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
       - name: Release notes from CHANGELOG.md

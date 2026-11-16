@@ -60,7 +60,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	go func() { // daily update check; the frontend shows a banner on "update-available"
 		for {
-			if r, err := updater.Check(version); err != nil {
+			if r, err := updater.Check(version, false); err != nil {
 				logging.Error("update check: %v", err)
 			} else if r != nil {
 				a.mu.Lock()
@@ -227,7 +227,7 @@ func (a *App) StartUpdate(req UpdateRequest) {
 		}
 		projectPath := p.Path
 
-		pCfg := config.ForProject(a.cfg.Projects[projectName], projectPath)
+		pCfg := config.ForProject(a.cfg.Project(projectName), projectPath)
 
 		tempBranch := executor.TempBranch(projectName)
 		startBranch := pCfg.GitStartBranch
@@ -324,7 +324,7 @@ func (a *App) FinalBranch(projectName string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	pCfg := config.ForProject(a.cfg.Projects[projectName], projectPath)
+	pCfg := config.ForProject(a.cfg.Project(projectName), projectPath)
 	return executor.FinalBranch(projectPath, pCfg.GitNewBranchPattern, projectName), nil
 }
 
@@ -352,7 +352,7 @@ func (a *App) CleanupBranch(projectName string) error {
 		return err
 	}
 
-	pCfg := config.ForProject(a.cfg.Projects[projectName], projectPath)
+	pCfg := config.ForProject(a.cfg.Project(projectName), projectPath)
 
 	tempBranch := executor.TempBranch(projectName)
 	if err := executor.Cleanup(projectPath, pCfg.GitStartBranch, tempBranch); err != nil {
@@ -396,7 +396,7 @@ func (a *App) MergeRequest(name, branch string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	a.cancels[name] = cancel
 	summary := a.summaries[name]
-	pc := config.ForProject(a.cfg.Projects[name], path)
+	pc := config.ForProject(a.cfg.Project(name), path)
 	a.mu.Unlock()
 
 	go func() {

@@ -79,6 +79,7 @@
       MaxConcurrent: loaded.MaxConcurrent || 3,
       ExcludedProjects: loaded.ExcludedProjects || [],
       Projects: loaded.Projects || {},
+      Defaults: loaded.Defaults || {},
     };
     await loadProjects();
   });
@@ -150,8 +151,8 @@
   function addProject() {
     if (newProjectName && !config.Projects[newProjectName]) {
       config.Projects[newProjectName] = {
-        GitStartBranch: 'master',
-        GitNewBranchPattern: '', // empty = default pattern
+        GitStartBranch: '', // empty = branch defaults
+        GitNewBranchPattern: '',
         IgnoredPackages: [],
         SmokePaths: [],
       };
@@ -234,7 +235,7 @@
 
 <main>
   <header>
-    <h1>◆ Drupal Updater</h1>
+    <h1><svg class="spark" viewBox="0 0 45 36" aria-hidden="true"><path fill="currentColor" d="M44.3405 17.295L44.3252 17.2935C30.4154 17.3718 24.506 9.22934 23.2001 1.35592C23.0692 0.566652 21.923 0.572046 21.7632 1.35592L21.7548 1.40223C20.4219 9.2372 14.5201 17.3076 0.704589 17.2534L0.659481 17.2546C-0.21725 17.3507 -0.2224 18.7116 0.659481 18.7066C14.5693 18.6283 20.4787 26.7708 21.7846 34.6442C21.9155 35.4334 23.0617 35.428 23.2215 34.6442L23.2299 34.5979C24.5647 26.7515 30.4818 18.669 44.3405 18.747C45.2224 18.7519 45.2172 17.391 44.3405 17.295Z"/></svg>Drupal Updater</h1>
     {#if update}
       <div class="update-banner">
         <span>{updateMsg || `${update.version} available`}</span>
@@ -302,136 +303,173 @@
 
   {:else if view === 'config'}
     <section class="panel config-panel">
-      <h2>Configuration</h2>
-
-      <div class="config-group">
-        <label style="flex: 1;">
-          Base folders (one per line, each scanned one level deep)
-          <textarea autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" rows="3" value={config.BaseFolders?.join('\n') || ''}
-            onchange={(e) => config.BaseFolders = e.target.value.split('\n').map(s => s.trim()).filter(Boolean)}></textarea>
-        </label>
-        <label style="flex: 1;">
-          Extra project paths (one per line, single projects outside the base folders)
-          <textarea autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" rows="3" value={config.ProjectPaths?.join('\n') || ''}
-            onchange={(e) => config.ProjectPaths = e.target.value.split('\n').map(s => s.trim()).filter(Boolean)}></textarea>
-        </label>
-        <label>
-          Max concurrent
-          <input type="number" bind:value={config.MaxConcurrent} min="1" max="20" />
-        </label>
+      <div class="settings-section">
+        <div class="section-head">
+          <h3>Projects</h3>
+          <p class="hint">Where Drupal projects are found.</p>
+        </div>
+        <div class="section-body two-col">
+          <label class="field">
+            Base folders <span class="hint">one per line, scanned one level deep</span>
+            <textarea autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" rows="3" value={config.BaseFolders?.join('\n') || ''}
+              onchange={(e) => config.BaseFolders = e.target.value.split('\n').map(s => s.trim()).filter(Boolean)}></textarea>
+          </label>
+          <label class="field">
+            Extra project paths <span class="hint">one per line, single projects</span>
+            <textarea autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" rows="3" value={config.ProjectPaths?.join('\n') || ''}
+              onchange={(e) => config.ProjectPaths = e.target.value.split('\n').map(s => s.trim()).filter(Boolean)}></textarea>
+          </label>
+          <label class="field span-2">
+            Excluded projects <span class="hint">comma-separated, * wildcards</span>
+            <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" value={config.ExcludedProjects?.join(', ') || ''}
+              onchange={(e) => config.ExcludedProjects = e.target.value.split(',').map(s => s.trim()).filter(Boolean)} />
+          </label>
+          <label class="field narrow">
+            Max concurrent runs
+            <input type="number" bind:value={config.MaxConcurrent} min="1" max="20" />
+          </label>
+        </div>
       </div>
 
-      <div class="config-group" style="margin-top: 12px;">
-        <label style="flex: 1;">
-          Excluded projects (comma-separated)
-          <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" value={config.ExcludedProjects?.join(', ') || ''}
-            onchange={(e) => config.ExcludedProjects = e.target.value.split(',').map(s => s.trim()).filter(Boolean)} />
-        </label>
+      <div class="settings-section">
+        <div class="section-head">
+          <h3>Branch defaults</h3>
+          <p class="hint">For every project. Project overrides and a repo's <code>drupal-updater.yaml</code> win.</p>
+        </div>
+        <div class="section-body two-col">
+          <label class="field">
+            Start branch
+            <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="master" bind:value={config.Defaults.GitStartBranch} />
+          </label>
+          <label class="field">
+            Final branch pattern <span class="hint">{'{date}'}, * = project</span>
+            <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="hotfix/{'{date}'}-drupal-updates" bind:value={config.Defaults.GitNewBranchPattern} />
+          </label>
+          <label class="field">
+            Merge request target
+            <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="the start branch" bind:value={config.Defaults.GitMergeTarget} />
+          </label>
+          <label class="field">
+            Commit message
+            <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Drupal updates {'{date}'}" bind:value={config.Defaults.GitCommitMessage} />
+          </label>
+        </div>
       </div>
 
-      <h3>Claude</h3>
-      <div class="config-group">
-        <label>
-          Model
-          <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" bind:value={config.ClaudeModel} />
-        </label>
-        <label>
-          Permission mode
-          <select bind:value={config.ClaudePermissionMode}>
-            <option value="dontAsk">dontAsk (deny unlisted tools)</option>
-            <option value="acceptEdits">acceptEdits</option>
-            <option value="plan">plan</option>
-            <option value="manual">manual</option>
-          </select>
-        </label>
-        <label>
-          Timeout (min)
-          <input type="number" bind:value={config.ClaudeTimeoutMinutes} min="1" />
-        </label>
-      </div>
-      <div class="config-group" style="margin-top: 12px;">
-        <label style="flex: 1;">
-          Allowed tools (one per line)
-          <textarea autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" rows="5" value={config.ClaudeAllowedTools?.join('\n') || ''}
-            onchange={(e) => config.ClaudeAllowedTools = e.target.value.split('\n').map(s => s.trim()).filter(Boolean)}></textarea>
-        </label>
-      </div>
-      <div class="config-group" style="margin-top: 12px;">
-        <label style="flex: 1;">
-          Prompt — placeholders: {'{{project}} {{path}} {{start_branch}} {{temp_branch}} {{ignored_packages}} {{smoke_paths}} {{project_instructions}} {{result_file}}'}
-          <textarea autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" rows="16" bind:value={config.ClaudePrompt}></textarea>
-        </label>
-        <button class="btn-sm" onclick={() => config.ClaudePrompt = claudeDefaults.prompt}>Reset prompt to default</button>
+      <div class="settings-section">
+        <div class="section-head">
+          <h3>Claude</h3>
+          <p class="hint">The session that runs each update.</p>
+        </div>
+        <div class="section-body three-col">
+          <label class="field">
+            Model
+            <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" bind:value={config.ClaudeModel} />
+          </label>
+          <label class="field">
+            Permission mode
+            <select bind:value={config.ClaudePermissionMode}>
+              <option value="dontAsk">dontAsk (deny unlisted tools)</option>
+              <option value="acceptEdits">acceptEdits</option>
+              <option value="plan">plan</option>
+              <option value="manual">manual</option>
+            </select>
+          </label>
+          <label class="field">
+            Timeout (minutes)
+            <input type="number" bind:value={config.ClaudeTimeoutMinutes} min="1" />
+          </label>
+          <details class="advanced span-3">
+            <summary>Advanced: allowed tools and prompt</summary>
+            <label class="field">
+              Allowed tools <span class="hint">one per line</span>
+              <textarea autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" rows="5" value={config.ClaudeAllowedTools?.join('\n') || ''}
+                onchange={(e) => config.ClaudeAllowedTools = e.target.value.split('\n').map(s => s.trim()).filter(Boolean)}></textarea>
+            </label>
+            <label class="field">
+              Prompt
+              <span class="hint">Placeholders: {'{{project}} {{path}} {{start_branch}} {{temp_branch}} {{ignored_packages}} {{smoke_paths}} {{project_instructions}} {{updates}} {{result_file}}'}</span>
+              <textarea autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" rows="14" bind:value={config.ClaudePrompt}></textarea>
+            </label>
+            <div><button class="btn-sm" onclick={() => config.ClaudePrompt = claudeDefaults.prompt}>Reset prompt to default</button></div>
+          </details>
+        </div>
       </div>
 
-      <h3>Project Overrides</h3>
-      <p class="hint">A <code>drupal-updater.yaml</code> committed in a project's repo is shared with the team and wins per field; these local overrides only fill the gaps. "Save to repo" writes this project's overrides into that file for you to commit.</p>
-      <div class="project-configs">
-        {#each Object.keys(config.Projects || {}) as name}
-          <div class="project-config-item">
-            <div class="project-config-header">
-              <strong>{name}</strong>
-              {#if projects.find(p => p.name === name)?.repoFile}<span class="badge badge-repo">repo config</span>{/if}
-              {#if repoSaved[name]}<span class="confirm-result">{repoSaved[name]}</span>{/if}
-              <div>
-                <button class="btn-sm" onclick={() => saveToRepo(name)} disabled={!projects.some(p => p.name === name)}>Save to repo</button>
-                <button class="btn-sm" onclick={() => editingProject = editingProject === name ? null : name}>
-                  {editingProject === name ? 'Close' : 'Edit'}
-                </button>
-                <button class="btn-sm btn-danger" onclick={() => deleteProject(name)}>Delete</button>
+      <div class="settings-section">
+        <div class="section-head">
+          <h3>Project overrides</h3>
+          <p class="hint">Local to this machine. A committed <code>drupal-updater.yaml</code> wins per field; "Save to repo" writes one for the team.</p>
+        </div>
+        <div class="section-body">
+          <div class="project-configs">
+            {#each Object.keys(config.Projects || {}) as name}
+              <div class="project-config-item">
+                <div class="project-config-header">
+                  <strong>{name}</strong>
+                  {#if projects.find(p => p.name === name)?.repoFile}<span class="badge badge-repo">repo config</span>{/if}
+                  {#if repoSaved[name]}<span class="confirm-result">{repoSaved[name]}</span>{/if}
+                  <div>
+                    <button class="btn-sm" onclick={() => saveToRepo(name)} disabled={!projects.some(p => p.name === name)}>Save to repo</button>
+                    <button class="btn-sm" onclick={() => editingProject = editingProject === name ? null : name}>
+                      {editingProject === name ? 'Close' : 'Edit'}
+                    </button>
+                    <button class="btn-sm btn-danger" onclick={() => deleteProject(name)}>Delete</button>
+                  </div>
+                </div>
+
+                {#if editingProject === name}
+                  <div class="project-config-edit">
+                    <label>
+                      Start branch
+                      <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder={config.Defaults.GitStartBranch || 'master'} bind:value={config.Projects[name].GitStartBranch} />
+                    </label>
+                    <label>
+                      Branch pattern
+                      <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder={config.Defaults.GitNewBranchPattern || 'hotfix/{date}-drupal-updates'} bind:value={config.Projects[name].GitNewBranchPattern} />
+                    </label>
+                    <label>
+                      Merge request target
+                      <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder={config.Defaults.GitMergeTarget || 'the start branch'} bind:value={config.Projects[name].GitMergeTarget} />
+                    </label>
+                    <label>
+                      Commit message for the merge request
+                      <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder={config.Defaults.GitCommitMessage || 'Drupal updates {date}'} bind:value={config.Projects[name].GitCommitMessage} />
+                    </label>
+                    <label>
+                      Ignored packages (comma-separated)
+                      <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" value={config.Projects[name].IgnoredPackages?.join(', ') || ''}
+                        onchange={(e) => config.Projects[name].IgnoredPackages = e.target.value.split(',').map(s => s.trim()).filter(Boolean)} />
+                    </label>
+                    <label>
+                      Extra smoke-test paths (comma-separated; prefix admin: for logged-in)
+                      <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" value={config.Projects[name].SmokePaths?.join(', ') || ''}
+                        onchange={(e) => config.Projects[name].SmokePaths = e.target.value.split(',').map(s => s.trim()).filter(Boolean)} />
+                    </label>
+                    <label>
+                      Extra instructions for Claude (added to the prompt)
+                      <textarea autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" rows="5" bind:value={config.Projects[name].ClaudeInstructions}></textarea>
+                    </label>
+                  </div>
+                {/if}
               </div>
-            </div>
-
-            {#if editingProject === name}
-              <div class="project-config-edit">
-                <label>
-                  Start branch
-                  <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" bind:value={config.Projects[name].GitStartBranch} />
-                </label>
-                <label>
-                  Branch pattern
-                  <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="hotfix/{'{date}'}-drupal-updates" bind:value={config.Projects[name].GitNewBranchPattern} />
-                </label>
-                <label>
-                  Merge request target (default: start branch)
-                  <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" bind:value={config.Projects[name].GitMergeTarget} />
-                </label>
-                <label>
-                  Commit message for the merge request
-                  <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Drupal updates {'{date}'}" bind:value={config.Projects[name].GitCommitMessage} />
-                </label>
-                <label>
-                  Ignored packages (comma-separated)
-                  <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" value={config.Projects[name].IgnoredPackages?.join(', ') || ''}
-                    onchange={(e) => config.Projects[name].IgnoredPackages = e.target.value.split(',').map(s => s.trim()).filter(Boolean)} />
-                </label>
-                <label>
-                  Extra smoke-test paths (comma-separated; prefix admin: for logged-in)
-                  <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" value={config.Projects[name].SmokePaths?.join(', ') || ''}
-                    onchange={(e) => config.Projects[name].SmokePaths = e.target.value.split(',').map(s => s.trim()).filter(Boolean)} />
-                </label>
-                <label>
-                  Extra instructions for Claude (added to the prompt)
-                  <textarea autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" rows="5" bind:value={config.Projects[name].ClaudeInstructions}></textarea>
-                </label>
-              </div>
-            {/if}
-          </div>
-        {/each}
-
-        <div class="add-project">
-          <select bind:value={newProjectName}>
-            <option value="">Select a project...</option>
-            {#each projects.filter(p => !config.Projects[p.name]) as p}
-              <option value={p.name}>{p.name}</option>
             {/each}
-          </select>
-          <button class="btn-sm" onclick={addProject} disabled={!newProjectName}>+ Add</button>
+
+            <div class="add-project">
+              <select bind:value={newProjectName}>
+                <option value="">Select a project...</option>
+                {#each projects.filter(p => !config.Projects[p.name]) as p}
+                  <option value={p.name}>{p.name}</option>
+                {/each}
+              </select>
+              <button class="btn-sm" onclick={addProject} disabled={!newProjectName}>+ Add</button>
+            </div>
+          </div>
         </div>
       </div>
 
       <div class="footer-actions">
-        <button class="btn-primary" onclick={saveConfig}>Save Configuration</button>
+        <button class="btn-primary" onclick={saveConfig}>Save settings</button>
       </div>
     </section>
 
@@ -630,6 +668,7 @@
   }
 
   header {
+    user-select: none;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -649,7 +688,9 @@
   }
 
   /* the spark: the leading diamond is the one red accent */
-  h1::first-letter { color: var(--red); }
+  h1 { display: flex; align-items: center; gap: 10px; }
+  /* Dynamate spark as on dynamate.be: cream on navy (the tile blends into the dark theme's navy) */
+  .spark { width: 1.6em; height: 1.6em; padding: 0.3em; flex: none; border-radius: 0.35em; background: var(--navy); color: var(--beige); box-sizing: border-box; }
 
   h2 {
     font-size: 1.1rem;
@@ -704,8 +745,45 @@
     overflow-y: auto;
     display: block;
   }
-  .config-panel > * {
-    margin-bottom: 12px;
+  .settings-section {
+    display: grid;
+    grid-template-columns: 170px 1fr;
+    gap: 20px;
+    padding: 18px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .settings-section:first-child { padding-top: 4px; }
+  .section-head h3 { margin: 0 0 4px; }
+  .section-head .hint { margin: 0; }
+  .section-body { display: grid; gap: 12px 16px; min-width: 0; }
+  .two-col { grid-template-columns: 1fr 1fr; }
+  .three-col { grid-template-columns: 1fr 1fr 1fr; }
+  .span-2 { grid-column: span 2; }
+  .span-3 { grid-column: 1 / -1; }
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    min-width: 0;
+  }
+  .field .hint { font-weight: 400; }
+  .field.narrow { max-width: 160px; }
+  .advanced { display: flex; flex-direction: column; gap: 12px; }
+  .advanced[open] { display: grid; gap: 12px; }
+  .advanced summary {
+    cursor: pointer;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--accent);
+    width: max-content;
+  }
+  @media (max-width: 760px) {
+    .settings-section { grid-template-columns: 1fr; gap: 10px; }
+    .two-col, .three-col { grid-template-columns: 1fr; }
+    .span-2 { grid-column: auto; }
   }
   .config-panel .project-configs {
     overflow: visible;
@@ -937,12 +1015,6 @@
   .btn-danger { border-color: var(--danger); color: var(--danger); }
   .btn-danger:hover { background: var(--danger-bg); border-color: var(--danger); }
 
-  .config-group {
-    display: flex;
-    gap: 16px;
-  }
-
-  .config-group label,
   .project-config-edit label {
     display: flex;
     flex-direction: column;

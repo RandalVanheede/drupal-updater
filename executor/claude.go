@@ -119,7 +119,7 @@ var claudeCfg struct {
 	allowed    []string
 	permission string
 	timeout    time.Duration
-	projects   map[string]config.ProjectConfig
+	projects   *config.Config // only Defaults and Projects, copied so later edits don't race a run
 }
 
 func orDefault(v, d string) string {
@@ -143,9 +143,9 @@ func Configure(cfg *config.Config) {
 		c.allowed = cfg.ClaudeAllowedTools
 	}
 	c.permission = safePermissionMode(cfg.ClaudePermissionMode)
-	c.projects = make(map[string]config.ProjectConfig, len(cfg.Projects))
+	c.projects = &config.Config{Defaults: cfg.Defaults, Projects: make(map[string]config.ProjectConfig, len(cfg.Projects))}
 	for k, v := range cfg.Projects {
-		c.projects[k] = v
+		c.projects.Projects[k] = v
 	}
 	c.timeout = defaultClaudeTimeout
 	if cfg.ClaudeTimeoutMinutes > 0 {
@@ -288,7 +288,7 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 		logging.Error("[%s] could not pre-trust folder: %v", name, err) // falls back to the trust-prompt detection below
 	}
 
-	proj := config.ForProject(claudeCfg.projects[name], path)
+	proj := config.ForProject(claudeCfg.projects.Project(name), path)
 	ignored, smoke := "none", "none"
 	if len(proj.IgnoredPackages) > 0 {
 		ignored = strings.Join(proj.IgnoredPackages, ", ")

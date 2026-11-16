@@ -35,6 +35,7 @@ export namespace config {
 	    ClaudePermissionMode: string;
 	    ClaudeTimeoutMinutes: number;
 	    ExcludedProjects: string[];
+	    Defaults: ProjectConfig;
 	    Projects: Record<string, ProjectConfig>;
 	
 	    static createFrom(source: any = {}) {
@@ -53,6 +54,7 @@ export namespace config {
 	        this.ClaudePermissionMode = source["ClaudePermissionMode"];
 	        this.ClaudeTimeoutMinutes = source["ClaudeTimeoutMinutes"];
 	        this.ExcludedProjects = source["ExcludedProjects"];
+	        this.Defaults = this.convertValues(source["Defaults"], ProjectConfig);
 	        this.Projects = this.convertValues(source["Projects"], ProjectConfig, true);
 	    }
 	
