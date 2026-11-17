@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-11-17
+
 ### Added
 - `scan_depth` (Settings → Projects): how many folder levels below a base folder are searched for projects, default 1. Use 2 for `<base>/<customer>/<project>`. A folder that is a project is not searched further.
 
@@ -77,6 +79,7 @@ First versioned release.
 - Build scripts for macOS (`scripts/build-dmg.sh`) and Linux amd64/arm64 (`scripts/build-linux.sh`, `scripts/build-linux-docker.sh`), and a CI pipeline that builds them for each release tag.
 
 [Unreleased]: https://github.com/RandalVanheede/drupal-updater/compare/v1.0.5...1.0.x
+[1.0.6]: https://github.com/RandalVanheede/drupal-updater/compare/v1.0.5...v1.0.6
 [1.0.5]: https://github.com/RandalVanheede/drupal-updater/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/RandalVanheede/drupal-updater/compare/v1.0.2...v1.0.4
 [1.0.2]: https://github.com/RandalVanheede/drupal-updater/compare/v1.0.1...v1.0.2
