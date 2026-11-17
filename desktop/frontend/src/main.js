@@ -1,4 +1,6 @@
-import '@fontsource-variable/syne'
+import '@fontsource-variable/atkinson-hyperlegible-next'
+import '@fontsource-variable/space-grotesk'
+import '@fontsource-variable/jetbrains-mono'
 import { mount } from 'svelte'
 import App from './App.svelte'
 

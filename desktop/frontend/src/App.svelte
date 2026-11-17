@@ -1,7 +1,84 @@
 <script>
-  import { onMount } from 'svelte';
+  const isMac = navigator.userAgent.includes('Macintosh');
+  import { onMount, tick } from 'svelte';
   import { DiscoverProjects, GetConfig, SaveConfig, StartUpdate, CancelProject, CancelAll, RenameBranch, CleanupBranch, RetryProjects, GetClaudeDefaults, SetUpdateMode, FinalBranch, SaveProjectFile, MergeRequest, GetVersion, GetUpdate, InstallUpdate } from '../wailsjs/go/main/App';
   import { EventsOn, BrowserOpenURL } from '../wailsjs/runtime/runtime';
+
+  const FONTS = {
+    atkinson: { label: 'Atkinson Hyperlegible', scale: 1.125, css: "'Atkinson Hyperlegible Next Variable', 'Atkinson Hyperlegible Next'" },
+    jetbrains: { label: 'JetBrains Mono', scale: 1, css: "'JetBrains Mono Variable', 'JetBrains Mono'" },
+    spacegrotesk: { label: 'Space Grotesk', scale: 1.1, css: "'Space Grotesk Variable', 'Space Grotesk'" },
+  };
+  const load = (k, ok, d) => { try { const v = localStorage.getItem(k); return ok(v) ? v : d; } catch { return d; } };
+  let theme = $state(load('theme', v => ['system', 'light', 'dark'].includes(v), 'system'));
+  let fontSize = $state(load('fontSize', v => ['14', '16', '18', '20'].includes(v), '16'));
+  const dark = window.matchMedia('(prefers-color-scheme: dark)');
+  let systemDark = $state(dark.matches);
+  dark.addEventListener('change', e => systemDark = e.matches);
+  $effect(() => {
+    document.documentElement.dataset.theme = theme === 'system' ? (systemDark ? 'dark' : 'light') : theme;
+    // per-font scale evens out the fonts' different x-heights
+    document.documentElement.style.fontSize = fontSize * FONTS[font].scale + 'px';
+    try { localStorage.setItem('theme', theme); localStorage.setItem('fontSize', fontSize); } catch {}
+  });
+  let font = $state((() => { try { return localStorage.getItem('font'); } catch { return null; } })());
+  if (!Object.hasOwn(FONTS, font)) font = 'atkinson';
+  $effect(() => {
+    const stack = FONTS[font].css + ', system-ui, sans-serif';
+    document.documentElement.style.setProperty('--font-head', stack);
+    document.documentElement.style.setProperty('--font-body', stack);
+    try { localStorage.setItem('font', font); } catch {}
+  });
+
+  // First-run tour: coach marks over real elements, replayable from the (?) button / Settings.
+  const STEPS = [
+    { view: 'projects', sel: '[data-tour=projects]', title: 'Your projects', text: 'Drupal projects found in your base folders show up here. Tick the ones you want to update, or use the filter and Toggle All above.' },
+    { view: 'projects', sel: '[data-tour=mode]', title: 'Update mode', text: 'Standard applies all minor and patch updates. Disaster only applies security fixes.' },
+    { view: 'projects', sel: '[data-tour=start]', title: 'Run the update', text: 'Claude updates each selected project on its own temporary branch, several at a time. When a project finishes you can review it, confirm, then merge it.' },
+    { view: 'config', sel: '[data-tour=folders]', title: 'Where projects come from', text: 'Add the folders to scan here. Nothing shows up on the Projects tab until you do.' },
+    { view: 'config', sel: '[data-tour=claude]', title: 'Claude settings', text: 'The prompt, allowed tools and permission mode used for every update. Per-project overrides are further down.' },
+    { view: 'projects', sel: '[data-tour=help]', title: 'That is it', text: 'Click (?) any time to see this tour again.' },
+  ];
+  let tour = $state(-1);
+  let tourRect = $state(null);
+  async function showStep(i) {
+    if (i >= STEPS.length) return endTour();
+    tour = i;
+    view = STEPS[i].view;
+    await tick();
+    const el = document.querySelector(STEPS[i].sel);
+    el?.scrollIntoView({ block: 'nearest' });
+    const r = el?.getBoundingClientRect();
+    tourRect = r ? { top: r.top, left: r.left, width: r.width, height: r.height } : null;
+  }
+  function endTour() {
+    tour = -1; tourRect = null; view = 'projects';
+    try { localStorage.setItem('tourDone', '1'); } catch {}
+  }
+  // Whole-pixel positions only: translate(-50%) lands on half pixels and blurs the text.
+  function tourStyle(r) {
+    const w = 320, h = 200, mid = Math.round((innerWidth - w) / 2);
+    if (!r) return `left:${mid}px;bottom:24px`;
+    const left = Math.round(Math.max(16, Math.min(r.left, innerWidth - w - 16)));
+    if (innerHeight - (r.top + r.height) >= h) return `left:${left}px;top:${Math.round(r.top + r.height + 12)}px`;
+    if (r.top >= h) return `left:${left}px;bottom:${Math.round(innerHeight - r.top + 12)}px`;
+    return `left:${mid}px;bottom:24px`;
+  }
+  // First run: appearance picker first (changes apply live behind it), then the tour.
+  let welcome = $state(false);
+  function finishWelcome() {
+    welcome = false;
+    try { localStorage.setItem('setupDone', '1'); } catch {}
+    let toured = false;
+    try { toured = !!localStorage.getItem('tourDone'); } catch {}
+    if (!toured) setTimeout(() => showStep(0), 300);
+  }
+  onMount(() => {
+    let setup = false, toured = false;
+    try { setup = !!localStorage.getItem('setupDone'); toured = !!localStorage.getItem('tourDone'); } catch {}
+    if (!setup && !toured) welcome = true; // existing users (tour already seen) are not asked
+    else if (!toured) setTimeout(() => showStep(0), 600);
+  });
 
   let view = $state('projects');
   let projects = $state([]);
@@ -230,7 +307,66 @@
   }
 </script>
 
-<main>
+<svelte:window
+  onresize={() => tour >= 0 && showStep(tour)}
+  onkeydown={(e) => { if (tour < 0) return; if (e.key === 'Escape') endTour(); else if (e.key === 'ArrowRight' || e.key === 'Enter') showStep(tour + 1); else if (e.key === 'ArrowLeft' && tour > 0) showStep(tour - 1); }} />
+
+{#if welcome}
+  <div class="tour-dim"></div>
+  <div class="welcome-wrap"><div class="tour-card welcome" role="dialog" aria-label="Welcome">
+    <h3>Welcome to Drupal Updater</h3>
+    <p>First, make it comfortable. Changes apply right away and you can change them later in Settings.</p>
+    <div class="welcome-fields">
+      <label class="field">Theme
+        <select bind:value={theme}>
+          <option value="system">Follow system</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
+      </label>
+      <label class="field">Font
+        <select bind:value={font}>
+          {#each Object.entries(FONTS) as [key, f]}<option value={key}>{f.label}</option>{/each}
+        </select>
+      </label>
+      <label class="field">Font size
+        <select bind:value={fontSize}>
+          <option value="14">Small</option>
+          <option value="16">Default</option>
+          <option value="18">Large</option>
+          <option value="20">Extra large</option>
+        </select>
+      </label>
+    </div>
+    <div class="tour-actions">
+      <span class="spacer"></span>
+      <button class="btn-primary" onclick={finishWelcome}>Continue</button>
+    </div>
+  </div></div>
+{/if}
+
+{#if tour >= 0}
+  <div class="tour-block"></div>
+  {#if tourRect}
+    <div class="tour-spot" style="top:{tourRect.top - 6}px;left:{tourRect.left - 6}px;width:{tourRect.width + 12}px;height:{tourRect.height + 12}px"></div>
+  {:else}
+    <div class="tour-dim"></div>
+  {/if}
+  <div class="tour-card" role="dialog" aria-label="Tutorial" style={tourStyle(tourRect)}>
+    <div class="tour-count">{tour + 1} / {STEPS.length}</div>
+    <h3>{STEPS[tour].title}</h3>
+    <p>{STEPS[tour].text}</p>
+    <div class="tour-actions">
+      <button class="btn-sm" onclick={endTour}>Skip</button>
+      <span class="spacer"></span>
+      {#if tour > 0}<button class="btn-sm" onclick={() => showStep(tour - 1)}>Back</button>{/if}
+      <button class="btn-primary" onclick={() => showStep(tour + 1)}>{tour === STEPS.length - 1 ? 'Done' : 'Next'}</button>
+    </div>
+  </div>
+{/if}
+
+<main class:mac={isMac}>
+  {#if isMac}<div class="titlebar"></div>{/if}
   <header>
     <h1><svg class="spark" viewBox="0 0 45 36" aria-hidden="true"><path fill="currentColor" d="M44.3405 17.295L44.3252 17.2935C30.4154 17.3718 24.506 9.22934 23.2001 1.35592C23.0692 0.566652 21.923 0.572046 21.7632 1.35592L21.7548 1.40223C20.4219 9.2372 14.5201 17.3076 0.704589 17.2534L0.659481 17.2546C-0.21725 17.3507 -0.2224 18.7116 0.659481 18.7066C14.5693 18.6283 20.4787 26.7708 21.7846 34.6442C21.9155 35.4334 23.0617 35.428 23.2215 34.6442L23.2299 34.5979C24.5647 26.7515 30.4818 18.669 44.3405 18.747C45.2224 18.7519 45.2172 17.391 44.3405 17.295Z"/></svg>Drupal Updater</h1>
     {#if update}
@@ -247,6 +383,7 @@
     <nav>
       <button class:active={view === 'projects'} onclick={() => view = 'projects'}>Projects</button>
       <button class:active={view === 'config'} onclick={() => view = 'config'}>Settings</button>
+      <button data-tour="help" class="help" title="Show the tutorial" aria-label="Show the tutorial" disabled={busy} onclick={() => showStep(0)}>?</button>
       {#if isRunning}
         <button class:active={view === 'running'} onclick={() => view = 'running'}>
           {busy ? '● Running' : '⚑ Review'}
@@ -267,7 +404,7 @@
         </div>
       </div>
 
-      <ul class="project-list">
+      <ul class="project-list" data-tour="projects">
         {#each projects.filter(p => !searchFilter || p.name.toLowerCase().includes(searchFilter.toLowerCase())) as project}
           <li class:selected={selected[project.name]}>
             <label>
@@ -285,14 +422,14 @@
       {/if}
 
       <div class="footer-actions">
-        <label class="update-mode">
+        <label class="update-mode" data-tour="mode">
           Mode
           <select bind:value={config.UpdateMode} onchange={() => SetUpdateMode(config.UpdateMode)}>
             <option value="standard">Standard (all minor/patch updates)</option>
             <option value="disaster">Disaster (security fixes only)</option>
           </select>
         </label>
-        <button class="btn-primary" onclick={startUpdate} disabled={!projects.some(p => selected[p.name])}>
+        <button class="btn-primary" data-tour="start" onclick={startUpdate} disabled={!projects.some(p => selected[p.name])}>
           Update Selected
         </button>
       </div>
@@ -301,6 +438,42 @@
   {:else if view === 'config'}
     <section class="panel config-panel">
       <div class="settings-section">
+        <div class="section-head">
+          <h3>Appearance</h3>
+          <p class="hint">Applies immediately, stored on this machine.</p>
+        </div>
+        <div class="section-body two-col">
+          <label class="field">
+            Theme
+            <select bind:value={theme}>
+              <option value="system">Follow system</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
+          </label>
+          <label class="field">
+            Font size
+            <select bind:value={fontSize}>
+              <option value="14">Small</option>
+              <option value="16">Default</option>
+              <option value="18">Large</option>
+              <option value="20">Extra large</option>
+            </select>
+          </label>
+          <div class="field">
+            Tutorial
+            <button class="btn-sm" onclick={() => showStep(0)}>Show tutorial again</button>
+          </div>
+          <label class="field">
+            Font
+            <select bind:value={font}>
+              {#each Object.entries(FONTS) as [key, f]}<option value={key}>{f.label}</option>{/each}
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div class="settings-section" data-tour="folders">
         <div class="section-head">
           <h3>Projects</h3>
           <p class="hint">Where Drupal projects are found.</p>
@@ -357,7 +530,7 @@
         </div>
       </div>
 
-      <div class="settings-section">
+      <div class="settings-section" data-tour="claude">
         <div class="section-head">
           <h3>Claude</h3>
           <p class="hint">The session that runs each update.</p>
@@ -600,7 +773,7 @@
     --terminal-text: #e8e4dc;
     --focus: var(--blue);
 
-    --font-head: 'Syne Variable', 'Syne', system-ui, sans-serif;
+    --font-head: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, monospace;
     --font-body: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     --font-mono: ui-monospace, 'SF Mono', Menlo, monospace;
     --radius: 6px;
@@ -608,31 +781,30 @@
     color-scheme: light;
   }
 
-  @media (prefers-color-scheme: dark) {
-    :global(:root) {
-      --bg: var(--navy);
-      --surface: #07173a;
-      --text: var(--cream);
-      --text-muted: #a3adc2;
-      --border: #1c2c52;
-      --border-strong: #2f4274;
-      --hover: #0c1f48;
-      --selected: #12295a;
-      --accent: var(--sky);
-      --accent-hover: #9ad6f5;
-      --on-accent: var(--navy);
-      --danger: #ff5a73;
-      --danger-bg: #3a0f22;
-      --success: #5fd39a;
-      --success-bg: #0d2e2a;
-      --running: var(--sky);
-      --running-bg: #0b2a4d;
-      --running-dot: var(--sky);
-      --terminal-bg: #020b1f;
-      --terminal-text: #e3ddd3;
-      --focus: var(--sky);
-      color-scheme: dark;
-    }
+  /* data-theme is always set from script (system preference resolved there) */
+  :global(:root[data-theme='dark']) {
+    --bg: var(--navy);
+    --surface: #07173a;
+    --text: var(--cream);
+    --text-muted: #a3adc2;
+    --border: #1c2c52;
+    --border-strong: #2f4274;
+    --hover: #0c1f48;
+    --selected: #12295a;
+    --accent: var(--sky);
+    --accent-hover: #9ad6f5;
+    --on-accent: var(--navy);
+    --danger: #ff5a73;
+    --danger-bg: #3a0f22;
+    --success: #5fd39a;
+    --success-bg: #0d2e2a;
+    --running: var(--sky);
+    --running-bg: #0b2a4d;
+    --running-dot: var(--sky);
+    --terminal-bg: #020b1f;
+    --terminal-text: #e3ddd3;
+    --focus: var(--sky);
+    color-scheme: dark;
   }
 
   :global(*) {
@@ -663,6 +835,13 @@
     gap: 18px;
   }
 
+  /* macOS hidden-inset title bar: drag strip clear of the traffic lights */
+  .titlebar {
+    position: fixed; top: 0; left: 0; right: 0; height: 28px;
+    --wails-draggable: drag;
+  }
+  main.mac { padding-top: 38px; }
+
   header {
     user-select: none;
     display: flex;
@@ -685,8 +864,8 @@
 
   /* the spark: the leading diamond is the one red accent */
   h1 { display: flex; align-items: center; gap: 10px; }
-  /* Dynamate spark as on dynamate.be: cream on navy (the tile blends into the dark theme's navy) */
-  .spark { width: 1.6em; height: 1.6em; padding: 0.3em; flex: none; border-radius: 0.35em; background: var(--navy); color: var(--beige); box-sizing: border-box; }
+  /* Dynamate spark: theme text colour (navy on light, cream on dark), no tile */
+  .spark { width: 1.6em; height: 1.6em; padding: 0.3em; flex: none; border-radius: 0.35em; color: var(--text); box-sizing: border-box; }
 
   h2 {
     font-size: 1.1rem;
@@ -700,6 +879,29 @@
     margin-top: 20px;
     margin-bottom: 8px;
   }
+
+  nav button.help { width: 1.9em; padding-left: 0; padding-right: 0; border-radius: 50%; }
+  .tour-block { position: fixed; inset: 0; z-index: 100; }
+  .tour-dim { position: fixed; inset: 0; z-index: 101; background: rgba(3, 16, 43, 0.6); }
+  .tour-spot {
+    position: fixed; z-index: 101; border-radius: 10px; pointer-events: none;
+    box-shadow: 0 0 0 9999px rgba(3, 16, 43, 0.6), 0 0 0 2px var(--accent);
+    transition: all 0.2s ease;
+  }
+  .tour-card {
+    position: fixed; z-index: 102; width: 320px; padding: 16px;
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--border-strong); border-radius: var(--radius);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  }
+  .welcome-wrap { position: fixed; inset: 0; z-index: 102; display: grid; place-items: center; pointer-events: none; }
+  .tour-card.welcome { position: static; width: 380px; pointer-events: auto; }
+  .welcome-fields { display: grid; gap: 12px; margin-top: 14px; }
+  .tour-card h3 { margin: 4px 0 6px; }
+  .tour-card p { font-size: 0.9rem; line-height: 1.45; }
+  .tour-count { font-size: 0.72rem; color: var(--text-muted); }
+  .tour-actions { display: flex; gap: 8px; margin-top: 14px; align-items: center; }
+  .tour-actions .spacer { flex: 1; }
 
   nav {
     display: flex;

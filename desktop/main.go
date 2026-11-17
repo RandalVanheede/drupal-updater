@@ -19,6 +19,7 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/mac"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -446,12 +447,18 @@ func main() {
 
 	app := NewApp()
 
+	w, h := loadWindowSize()
 	err := wails.Run(&options.App{
-		Title:  "Drupal Updater",
-		Width:  900,
-		Height: 600,
+		Title:         "Drupal Updater",
+		Width:         w,
+		Height:        h,
+		OnBeforeClose: saveWindowSize,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
+		},
+		// macOS: content extends under a transparent title bar; traffic lights stay. Linux keeps its native frame.
+		Mac: &mac.Options{
+			TitleBar: mac.TitleBarHiddenInset(),
 		},
 		OnStartup: app.startup,
 		Bind: []interface{}{
