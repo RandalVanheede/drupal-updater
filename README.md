@@ -37,9 +37,10 @@ Semantic versioning; changes go in `CHANGELOG.md` (Keep a Changelog). Work happe
 Config file location: `~/.config/drupal-updater/config.yaml`
 
 ```yaml
-base_folders:                           # each scanned one level deep for projects
+base_folders:                           # each scanned for projects (see scan_depth)
   - ~/projects
   - ~/clients
+scan_depth: 1                           # folder levels below a base folder; 2 finds ~/clients/<customer>/<project>
 project_paths:                          # single projects outside the base folders
   - ~/work/legacy-site
 
@@ -110,9 +111,7 @@ One-time setup: `go run ./scripts/sign -genkey`, store the private key as the Gi
 
 ## Auto-Detection
 
-On startup the app scans every base folder for subdirectories containing either:
-- A `.ddev/` directory, **or**
-- A `composer.json` file
+On startup the app scans every base folder for subdirectories (down to `scan_depth` levels) whose `composer.json` requires `drupal/core*` (core, recommended, dev, …) or `drupal/cms`. Non-Drupal projects and folders with only a `.ddev/` are ignored.
 
 Each match, plus every `project_paths` entry, becomes a selectable project. A project is named after its folder; when two projects share a folder name, both are shown as `<parent>/<folder>` (or the full path if that still clashes). That name is also the key under `projects:`, so settings stored under the plain folder name must be moved when a duplicate appears.
 

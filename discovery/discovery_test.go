@@ -6,16 +6,24 @@ import (
 	"testing"
 )
 
+// drupalSite makes dir a Drupal project.
+func drupalSite(dir string) {
+	os.MkdirAll(dir, 0o755)
+	os.WriteFile(filepath.Join(dir, "composer.json"), []byte(`{"require":{"drupal/core-recommended":"^11"}}`), 0o644)
+}
+
 func TestDiscoverProjects(t *testing.T) {
 	base := t.TempDir()
-	os.MkdirAll(filepath.Join(base, "ddev-site", ".ddev"), 0o755)
-	os.MkdirAll(filepath.Join(base, "composer-site"), 0o755)
-	os.WriteFile(filepath.Join(base, "composer-site", "composer.json"), []byte("{}"), 0o644)
-	os.MkdirAll(filepath.Join(base, "old-site", ".ddev"), 0o755)
+	drupalSite(filepath.Join(base, "ddev-site"))
+	drupalSite(filepath.Join(base, "composer-site"))
+	drupalSite(filepath.Join(base, "old-site"))
+	os.MkdirAll(filepath.Join(base, "ddev-only", ".ddev"), 0o755)
+	os.MkdirAll(filepath.Join(base, "laravel"), 0o755)
+	os.WriteFile(filepath.Join(base, "laravel", "composer.json"), []byte(`{"require":{"laravel/framework":"^11"}}`), 0o644)
 	os.MkdirAll(filepath.Join(base, "not-a-project"), 0o755)
 	os.WriteFile(filepath.Join(base, "file.txt"), nil, 0o644)
 
-	projects, err := DiscoverProjects([]string{base}, nil, []string{"old-*"})
+	projects, err := DiscoverProjects([]string{base}, nil, []string{"old-*"}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +39,7 @@ func TestDiscoverProjects(t *testing.T) {
 }
 
 func TestDiscoverProjectsMissingBase(t *testing.T) {
-	projects, err := DiscoverProjects([]string{filepath.Join(t.TempDir(), "nope")}, []string{filepath.Join(t.TempDir(), "gone")}, nil)
+	projects, err := DiscoverProjects([]string{filepath.Join(t.TempDir(), "nope")}, []string{filepath.Join(t.TempDir(), "gone")}, nil, 1)
 	if err != nil || len(projects) != 0 {
 		t.Fatalf("got %v, %v", projects, err)
 	}
@@ -39,11 +47,11 @@ func TestDiscoverProjectsMissingBase(t *testing.T) {
 
 func TestDiscoverProjectsMultipleFolders(t *testing.T) {
 	a, b, extra := t.TempDir(), t.TempDir(), t.TempDir()
-	for _, dir := range []string{filepath.Join(a, "site", ".ddev"), filepath.Join(b, "site", ".ddev"), filepath.Join(b, "other", ".ddev")} {
-		os.MkdirAll(dir, 0o755)
+	for _, dir := range []string{filepath.Join(a, "site"), filepath.Join(b, "site"), filepath.Join(b, "other")} {
+		drupalSite(dir)
 	}
 	// extra has no project markers; b/other is listed twice (base folder and explicit path)
-	projects, err := DiscoverProjects([]string{a, b}, []string{extra, filepath.Join(b, "other")}, nil)
+	projects, err := DiscoverProjects([]string{a, b}, []string{extra, filepath.Join(b, "other")}, nil, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,9 +72,9 @@ func TestDiscoverProjectsMultipleFolders(t *testing.T) {
 
 func TestDiscoverProjectsSameParentName(t *testing.T) {
 	x, y := filepath.Join(t.TempDir(), "a"), filepath.Join(t.TempDir(), "a")
-	os.MkdirAll(filepath.Join(x, "site", ".ddev"), 0o755)
-	os.MkdirAll(filepath.Join(y, "site", ".ddev"), 0o755)
-	projects, err := DiscoverProjects([]string{x, y}, nil, nil)
+	drupalSite(filepath.Join(x, "site"))
+	drupalSite(filepath.Join(y, "site"))
+	projects, err := DiscoverProjects([]string{x, y}, nil, nil, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,5 +82,20 @@ func TestDiscoverProjectsSameParentName(t *testing.T) {
 		if p, ok := Find(projects, path); !ok || p.Path != path {
 			t.Errorf("%s not named by full path: %v", path, projects)
 		}
+	}
+}
+
+func TestDiscoverProjectsDepth(t *testing.T) {
+	base := t.TempDir()
+	drupalSite(filepath.Join(base, "customer", "site"))
+	drupalSite(filepath.Join(base, "customer", "site", "web", "inner")) // inside a project: skipped
+	drupalSite(filepath.Join(base, "customer", "old-site"))
+	want := filepath.Join(base, "customer", "site")
+	if p, _ := DiscoverProjects([]string{base}, nil, nil, 1); len(p) != 0 {
+		t.Errorf("depth 1 found %v", p)
+	}
+	p, err := DiscoverProjects([]string{base}, nil, []string{"old-*"}, 2)
+	if err != nil || len(p) != 1 || p[0].Path != want {
+		t.Errorf("depth 2: got %v, %v", p, err)
 	}
 }

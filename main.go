@@ -74,7 +74,7 @@ func main() {
 
 	executor.Configure(cfg)
 
-	projects, err := discovery.DiscoverProjects(cfg.BaseFolders, cfg.ProjectPaths, cfg.ExcludedProjects)
+	projects, err := discovery.DiscoverProjects(cfg.BaseFolders, cfg.ProjectPaths, cfg.ExcludedProjects, cfg.ScanDepth)
 	if err != nil {
 		logging.Error("Error discovering projects: %v", err)
 		fmt.Fprintf(os.Stderr, "Error discovering projects: %v\n", err)

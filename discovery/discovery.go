@@ -20,10 +20,11 @@ func expandHome(p string) string {
 	return filepath.Clean(p)
 }
 
-// DiscoverProjects scans each base folder one level deep and adds every explicit project path.
+// DiscoverProjects scans each base folder up to depth levels deep (min 1; a project's own subfolders are
+// not searched) and adds every explicit project path.
 // A project is named after its folder; when two share a name, both become "<parent>/<folder>",
 // and if that still clashes, the full path (names key the config, tmux sessions and run dirs).
-func DiscoverProjects(baseFolders, projectPaths, excludedProjects []string) ([]Project, error) {
+func DiscoverProjects(baseFolders, projectPaths, excludedProjects []string, depth int) ([]Project, error) {
 	isExcluded := func(name string) bool {
 		for _, pattern := range excludedProjects {
 			if matched, _ := filepath.Match(pattern, name); matched {
@@ -32,14 +33,10 @@ func DiscoverProjects(baseFolders, projectPaths, excludedProjects []string) ([]P
 		}
 		return false
 	}
-	// A naive check: consider it a project if it has a .ddev folder or composer.json
+	// A Drupal project requires drupal/core (or a distribution/CMS that pulls it in) in its composer.json.
 	isProject := func(dir string) bool {
-		for _, marker := range []string{".ddev", "composer.json"} {
-			if _, err := os.Stat(filepath.Join(dir, marker)); err == nil {
-				return true
-			}
-		}
-		return false
+		data, err := os.ReadFile(filepath.Join(dir, "composer.json"))
+		return err == nil && (strings.Contains(string(data), `"drupal/core`) || strings.Contains(string(data), `"drupal/cms"`))
 	}
 
 	var paths []string
@@ -51,20 +48,35 @@ func DiscoverProjects(baseFolders, projectPaths, excludedProjects []string) ([]P
 		}
 	}
 
+	var scan func(dir string, left int) error
+	scan = func(dir string, left int) error {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			p := filepath.Join(dir, entry.Name())
+			if !entry.IsDir() || isExcluded(entry.Name()) {
+				continue
+			}
+			if isProject(p) {
+				add(p)
+			} else if left > 1 {
+				if err := scan(p, left-1); err != nil && !os.IsPermission(err) {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
 	for _, base := range baseFolders {
 		base = expandHome(base)
-		entries, err := os.ReadDir(base)
-		if err != nil {
+		if err := scan(base, max(depth, 1)); err != nil {
 			if os.IsNotExist(err) {
 				continue // base folder doesn't exist (yet)
 			}
 			return nil, err
-		}
-		for _, entry := range entries {
-			p := filepath.Join(base, entry.Name())
-			if entry.IsDir() && isProject(p) && !isExcluded(entry.Name()) {
-				add(p)
-			}
 		}
 	}
 	// Explicit paths are added on purpose, so no marker or exclusion check; missing ones are skipped.

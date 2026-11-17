@@ -26,7 +26,8 @@ type ProjectConfig struct {
 }
 
 type Config struct {
-	BaseFolders          []string                 `yaml:"base_folders" json:"BaseFolders"`             // scanned one level deep for projects
+	BaseFolders          []string                 `yaml:"base_folders" json:"BaseFolders"`             // scanned ScanDepth levels deep for projects
+	ScanDepth            int                      `yaml:"scan_depth,omitempty" json:"ScanDepth"`       // folder levels below a base folder to search; default 1
 	ProjectPaths         []string                 `yaml:"project_paths,omitempty" json:"ProjectPaths"` // single projects outside the base folders
 	LegacyBaseFolder     string                   `yaml:"base_folder,omitempty" json:"-"`              // old single-folder key, moved into BaseFolders on load
 	MaxConcurrent        int                      `yaml:"max_concurrent" json:"MaxConcurrent"`

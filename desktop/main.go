@@ -113,7 +113,7 @@ type ProjectInfo struct {
 }
 
 func (a *App) DiscoverProjects() ([]ProjectInfo, error) {
-	projects, err := discovery.DiscoverProjects(a.cfg.BaseFolders, a.cfg.ProjectPaths, a.cfg.ExcludedProjects)
+	projects, err := discovery.DiscoverProjects(a.cfg.BaseFolders, a.cfg.ProjectPaths, a.cfg.ExcludedProjects, a.cfg.ScanDepth)
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +162,7 @@ type UpdateRequest struct {
 
 // projectPath finds a discovered project's folder by name.
 func (a *App) projectPath(name string) (string, error) {
-	projects, err := discovery.DiscoverProjects(a.cfg.BaseFolders, a.cfg.ProjectPaths, a.cfg.ExcludedProjects)
+	projects, err := discovery.DiscoverProjects(a.cfg.BaseFolders, a.cfg.ProjectPaths, a.cfg.ExcludedProjects, a.cfg.ScanDepth)
 	if err != nil {
 		return "", err
 	}
@@ -200,7 +200,7 @@ func (a *App) StartUpdate(req UpdateRequest) {
 		ctx         context.Context
 	}
 
-	projects, err := discovery.DiscoverProjects(a.cfg.BaseFolders, a.cfg.ProjectPaths, a.cfg.ExcludedProjects)
+	projects, err := discovery.DiscoverProjects(a.cfg.BaseFolders, a.cfg.ProjectPaths, a.cfg.ExcludedProjects, a.cfg.ScanDepth)
 	var jobs []job
 	for _, projectName := range req.Projects {
 		a.mu.Lock()

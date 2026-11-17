@@ -53,7 +53,7 @@ func loadConfigOrFatal() *config.Config {
 
 // discoverOrFatal discovers projects, calling fatal on error.
 func discoverOrFatal(cfg *config.Config) []discovery.Project {
-	projects, err := discovery.DiscoverProjects(cfg.BaseFolders, cfg.ProjectPaths, cfg.ExcludedProjects)
+	projects, err := discovery.DiscoverProjects(cfg.BaseFolders, cfg.ProjectPaths, cfg.ExcludedProjects, cfg.ScanDepth)
 	if err != nil {
 		fatal(fmt.Sprintf("failed to discover projects: %v", err))
 	}

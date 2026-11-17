@@ -77,6 +77,7 @@
       BaseFolders: loaded.BaseFolders || [],
       ProjectPaths: loaded.ProjectPaths || [],
       MaxConcurrent: loaded.MaxConcurrent || 3,
+      ScanDepth: loaded.ScanDepth || 1,
       ExcludedProjects: loaded.ExcludedProjects || [],
       Projects: loaded.Projects || {},
       Defaults: loaded.Defaults || {},
@@ -323,6 +324,10 @@
             Excluded projects <span class="hint">comma-separated, * wildcards</span>
             <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" value={config.ExcludedProjects?.join(', ') || ''}
               onchange={(e) => config.ExcludedProjects = e.target.value.split(',').map(s => s.trim()).filter(Boolean)} />
+          </label>
+          <label class="field narrow">
+            Scan depth <span class="hint">levels below a base folder</span>
+            <input type="number" bind:value={config.ScanDepth} min="1" max="10" />
           </label>
           <label class="field narrow">
             Max concurrent runs

@@ -36,7 +36,7 @@ func fieldByLabel(t *testing.T, fs []field, label string) field {
 func TestConfigFields(t *testing.T) {
 	base := t.TempDir()
 	os.Mkdir(filepath.Join(base, "site"), 0o755)
-	os.WriteFile(filepath.Join(base, "site", "composer.json"), []byte("{}"), 0o644)
+	os.WriteFile(filepath.Join(base, "site", "composer.json"), []byte(`{"require":{"drupal/core":"^11"}}`), 0o644)
 	cfg := &config.Config{BaseFolders: []string{base}}
 	cm := NewConfigModel(cfg, filepath.Join(t.TempDir(), "config.yaml"))
 
@@ -67,7 +67,7 @@ func TestConfigFields(t *testing.T) {
 func TestEmbeddedSettingsReload(t *testing.T) {
 	base, cfgPath := t.TempDir(), filepath.Join(t.TempDir(), "config.yaml")
 	os.Mkdir(filepath.Join(base, "site"), 0o755)
-	os.WriteFile(filepath.Join(base, "site", "composer.json"), []byte("{}"), 0o644)
+	os.WriteFile(filepath.Join(base, "site", "composer.json"), []byte(`{"require":{"drupal/core":"^11"}}`), 0o644)
 	cfg := &config.Config{BaseFolders: []string{base}, MaxConcurrent: 3}
 	config.SaveConfig(cfgPath, cfg)
 	m := New(cfg, nil, cfgPath, "dev")

@@ -121,7 +121,9 @@ func (cm *configModel) globalFields() []field {
 		fs = append(fs, f)
 	}
 	g, s := sl(&c.BaseFolders)
-	add("Projects", "Base folders", g, s, field{placeholder: "scanned one level deep"})
+	add("Projects", "Base folders", g, s, field{placeholder: "scanned for projects"})
+	g, s = num(&c.ScanDepth, 1)
+	add("Projects", "Scan depth", g, s, field{placeholder: "levels below a base folder"})
 	g, s = sl(&c.ProjectPaths)
 	add("Projects", "Extra project paths", g, s, field{placeholder: "single projects"})
 	g, s = sl(&c.ExcludedProjects)
@@ -211,7 +213,7 @@ func (cm *configModel) projectFields(name string) []field {
 
 // projectPath finds a configured project's folder, if it is discovered.
 func (cm *configModel) projectPath(name string) (string, bool) {
-	projects, _ := discovery.DiscoverProjects(cm.cfg.BaseFolders, cm.cfg.ProjectPaths, cm.cfg.ExcludedProjects)
+	projects, _ := discovery.DiscoverProjects(cm.cfg.BaseFolders, cm.cfg.ProjectPaths, cm.cfg.ExcludedProjects, cm.cfg.ScanDepth)
 	p, ok := discovery.Find(projects, name)
 	return p.Path, ok
 }

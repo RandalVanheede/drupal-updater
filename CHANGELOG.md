@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+- `scan_depth` (Settings → Projects): how many folder levels below a base folder are searched for projects, default 1. Use 2 for `<base>/<customer>/<project>`. A folder that is a project is not searched further.
+
+### Changed
+- Auto-detection only picks up Drupal projects: a `composer.json` requiring `drupal/core*` or `drupal/cms`. A folder with just `.ddev/` or a non-Drupal `composer.json` is no longer listed (add it via `project_paths` if needed).
+
 ## [1.0.5] - 2026-11-16
 
 ### Added

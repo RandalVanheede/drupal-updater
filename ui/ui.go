@@ -259,7 +259,7 @@ func (m *model) closeSettings() {
 	}
 	*m.cfg = *cfg
 	executor.Configure(m.cfg)
-	projects, err := discovery.DiscoverProjects(m.cfg.BaseFolders, m.cfg.ProjectPaths, m.cfg.ExcludedProjects)
+	projects, err := discovery.DiscoverProjects(m.cfg.BaseFolders, m.cfg.ProjectPaths, m.cfg.ExcludedProjects, m.cfg.ScanDepth)
 	if err != nil {
 		m.updateMsg = "✗ scanning project folders: " + err.Error()
 		return
