@@ -87,6 +87,7 @@ export namespace main {
 	    name: string;
 	    path: string;
 	    repoFile: boolean;
+	    core: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ProjectInfo(source);
@@ -97,6 +98,7 @@ export namespace main {
 	        this.name = source["name"];
 	        this.path = source["path"];
 	        this.repoFile = source["repoFile"];
+	        this.core = source["core"];
 	    }
 	}
 	export class UpdateRequest {

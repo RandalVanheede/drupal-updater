@@ -1,7 +1,7 @@
 <script>
   const isMac = navigator.userAgent.includes('Macintosh');
   import { onMount, tick } from 'svelte';
-  import { DiscoverProjects, GetConfig, SaveConfig, StartUpdate, CancelProject, CancelAll, RenameBranch, CleanupBranch, RetryProjects, GetClaudeDefaults, SetUpdateMode, FinalBranch, SaveProjectFile, MergeRequest, GetVersion, GetUpdate, InstallUpdate } from '../wailsjs/go/main/App';
+  import { DiscoverProjects, CoreStatuses, GetConfig, SaveConfig, StartUpdate, CancelProject, CancelAll, RenameBranch, CleanupBranch, RetryProjects, GetClaudeDefaults, SetUpdateMode, FinalBranch, SaveProjectFile, MergeRequest, GetVersion, GetUpdate, InstallUpdate } from '../wailsjs/go/main/App';
   import { EventsOn, BrowserOpenURL } from '../wailsjs/runtime/runtime';
 
   const FONTS = {
@@ -35,19 +35,25 @@
     { view: 'projects', sel: '[data-tour=projects]', title: 'Your projects', text: 'Drupal projects found in your base folders show up here. Tick the ones you want to update, or use the filter and Toggle All above.' },
     { view: 'projects', sel: '[data-tour=mode]', title: 'Update mode', text: 'Standard applies all minor and patch updates. Disaster only applies security fixes.' },
     { view: 'projects', sel: '[data-tour=start]', title: 'Run the update', text: 'Claude updates each selected project on its own temporary branch, several at a time. When a project finishes you can review it, confirm, then merge it.' },
-    { view: 'config', sel: '[data-tour=folders]', title: 'Where projects come from', text: 'Add the folders to scan here. Nothing shows up on the Projects tab until you do.' },
-    { view: 'config', sel: '[data-tour=claude]', title: 'Claude settings', text: 'The prompt, allowed tools and permission mode used for every update. Per-project overrides are further down.' },
+    { view: 'config', tab: 'projects', sel: '[data-tour=folders]', title: 'Where projects come from', text: 'Add the folders to scan here. Nothing shows up on the Projects tab until you do.' },
+    { view: 'config', tab: 'claude', sel: '[data-tour=claude]', openAdvanced: true, title: 'Claude settings', text: 'Model, permission mode and timeout, plus the allowed tools and the prompt in the advanced part (opened here). Per-project overrides are further down.' },
     { view: 'projects', sel: '[data-tour=help]', title: 'That is it', text: 'Click (?) any time to see this tour again.' },
   ];
+  function setMode(m) { config.UpdateMode = m; SetUpdateMode(m); }
   let tour = $state(-1);
   let tourRect = $state(null);
   async function showStep(i) {
     if (i >= STEPS.length) return endTour();
     tour = i;
     view = STEPS[i].view;
+    if (STEPS[i].tab) settingsTab = STEPS[i].tab;
+    await tick();
+    const adv = document.querySelector('details.advanced');
+    if (adv) adv.open = !!STEPS[i].openAdvanced;
     await tick();
     const el = document.querySelector(STEPS[i].sel);
-    el?.scrollIntoView({ block: 'nearest' });
+    // a target taller than most of the window is aligned to the top so its start is visible
+    el?.scrollIntoView({ block: el.offsetHeight > innerHeight * 0.6 ? 'start' : 'nearest' });
     const r = el?.getBoundingClientRect();
     tourRect = r ? { top: r.top, left: r.left, width: r.width, height: r.height } : null;
   }
@@ -80,6 +86,12 @@
     else if (!toured) setTimeout(() => showStep(0), 600);
   });
 
+  const TABS = [['projects', 'Projects'], ['branches', 'Branch defaults'], ['claude', 'Claude'], ['overrides', 'Project overrides'], ['appearance', 'Appearance']];
+  let settingsTab = $state('projects');
+  const THEMES = [['system', 'System'], ['light', 'Light'], ['dark', 'Dark']];
+  const SIZES = [['14', 'Small'], ['16', 'Default'], ['18', 'Large'], ['20', 'Extra large']];
+  const FONT_ITEMS = Object.entries(FONTS).map(([k, f]) => [k, f.label, f.css]);
+
   let view = $state('projects');
   let projects = $state([]);
   let selected = $state({});
@@ -98,6 +110,14 @@
   let isRunning = $state(false);
 
   let searchFilter = $state('');
+  let statusFilter = $state('all');
+  // own keys only: project.core comes from composer.lock, so "constructor" must not hit Object.prototype
+  const coreOf = (p) => (p.core && Object.hasOwn(coreStatus, p.core) ? coreStatus[p.core] : null);
+  const STATUS_FILTERS = [['all', 'All'], ['current', 'Up to date'], ['behind', 'Behind'], ['security', 'Security']];
+  // projects passing both the text and the update-status filter (unknown status only shows under All)
+  const visible = $derived(projects.filter(p =>
+    (!searchFilter || p.name.toLowerCase().includes(searchFilter.toLowerCase())) &&
+    (statusFilter === 'all' || coreOf(p)?.status === statusFilter)));
 
   let branchNames = $state({});
   let confirmResults = $state({});
@@ -156,6 +176,12 @@
     await loadProjects();
   });
 
+  let coreStatus = $state({});
+  const CORE_TITLE = {
+    current: () => 'Drupal core is up to date',
+    behind: (r) => `Drupal core is behind (${r.latest} available), no security update`,
+    security: (r) => `Security update needed (${r.latest} available)`,
+  };
   async function loadProjects() {
     try {
       projects = await DiscoverProjects();
@@ -165,11 +191,14 @@
     } catch (e) {
       projects = [];
     }
+    // dots are optional: offline or a failed lookup just leaves them out
+    CoreStatuses([...new Set(projects.map(p => p.core).filter(Boolean))]).then(r => coreStatus = r || {}).catch(() => {});
   }
 
+  // acts on what the filters show, so hidden projects are never selected by accident
   function toggleAll() {
-    const allSelected = projects.every(p => selected[p.name]);
-    projects.forEach(p => selected[p.name] = !allSelected);
+    const allSelected = visible.every(p => selected[p.name]);
+    visible.forEach(p => selected[p.name] = !allSelected);
   }
 
   function startUpdate() {
@@ -311,32 +340,26 @@
   onresize={() => tour >= 0 && showStep(tour)}
   onkeydown={(e) => { if (tour < 0) return; if (e.key === 'Escape') endTour(); else if (e.key === 'ArrowRight' || e.key === 'Enter') showStep(tour + 1); else if (e.key === 'ArrowLeft' && tour > 0) showStep(tour - 1); }} />
 
+{#snippet seg(label, items, current, pick)}
+  <div class="field">
+    <span>{label}</span>
+    <div class="seg" role="radiogroup" aria-label={label}>
+      {#each items as [value, text, face]}
+        <button type="button" role="radio" aria-checked={current === value} class:on={current === value} style:font-family={face} onclick={() => pick(value)}>{text}</button>
+      {/each}
+    </div>
+  </div>
+{/snippet}
+
 {#if welcome}
   <div class="tour-dim"></div>
   <div class="welcome-wrap"><div class="tour-card welcome" role="dialog" aria-label="Welcome">
     <h3>Welcome to Drupal Updater</h3>
     <p>First, make it comfortable. Changes apply right away and you can change them later in Settings.</p>
     <div class="welcome-fields">
-      <label class="field">Theme
-        <select bind:value={theme}>
-          <option value="system">Follow system</option>
-          <option value="light">Light</option>
-          <option value="dark">Dark</option>
-        </select>
-      </label>
-      <label class="field">Font
-        <select bind:value={font}>
-          {#each Object.entries(FONTS) as [key, f]}<option value={key}>{f.label}</option>{/each}
-        </select>
-      </label>
-      <label class="field">Font size
-        <select bind:value={fontSize}>
-          <option value="14">Small</option>
-          <option value="16">Default</option>
-          <option value="18">Large</option>
-          <option value="20">Extra large</option>
-        </select>
-      </label>
+      {@render seg('Theme', THEMES, theme, v => theme = v)}
+      {@render seg('Font', FONT_ITEMS, font, v => font = v)}
+      {@render seg('Font size', SIZES, fontSize, v => fontSize = v)}
     </div>
     <div class="tour-actions">
       <span class="spacer"></span>
@@ -399,36 +422,51 @@
         <div class="search-box">
           <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" bind:value={searchFilter} placeholder="Filter projects..." class="search-input" />
         </div>
+        <div class="seg seg-sm" role="radiogroup" aria-label="Filter by update status">
+          {#each STATUS_FILTERS as [key, label]}
+            <button type="button" role="radio" aria-checked={statusFilter === key} class:on={statusFilter === key} onclick={() => statusFilter = key}>{#if key !== 'all'}<i class="dot dot-{key}"></i>{/if}{label}</button>
+          {/each}
+        </div>
         <div class="actions">
           <button class="btn-sm" onclick={toggleAll}>Toggle All</button>
         </div>
       </div>
 
       <ul class="project-list" data-tour="projects">
-        {#each projects.filter(p => !searchFilter || p.name.toLowerCase().includes(searchFilter.toLowerCase())) as project}
+        {#each visible as project}
           <li class:selected={selected[project.name]}>
             <label>
               <input type="checkbox" bind:checked={selected[project.name]} />
-              <span class="name">{project.name}</span>
-              {#if project.repoFile}<span class="badge badge-repo" title="Settings from the repo's drupal-updater.yaml">repo config</span>{/if}
-              <span class="path">{project.path}</span>
+              <span class="namecell">
+                <span class="name">{project.name}</span>
+                {#if project.repoFile}<span class="badge badge-repo" title="Settings from the repo's drupal-updater.yaml">repo config</span>{/if}
+              </span>
+              <span class="corecell">
+                {#if project.core}{@const st = coreOf(project)}<span class="core" title={(st && CORE_TITLE[st.status]?.(st)) || 'Installed Drupal core (composer.lock)'}>{#if st}<i class="dot dot-{st.status}"></i>{/if}{project.core}</span>{/if}
+              </span>
+              <!-- rtl + ellipsis cuts the front of the path; <bdi> keeps the text itself left-to-right -->
+              <span class="path" title={project.path}><bdi>{project.path}</bdi></span>
             </label>
           </li>
         {/each}
       </ul>
+
+      {#if projects.length > 0 && visible.length === 0}
+        <p class="empty">No projects match the filters.</p>
+      {/if}
 
       {#if projects.length === 0}
         <p class="empty">No projects found. Check your project folders in Settings.</p>
       {/if}
 
       <div class="footer-actions">
-        <label class="update-mode" data-tour="mode">
-          Mode
-          <select bind:value={config.UpdateMode} onchange={() => SetUpdateMode(config.UpdateMode)}>
-            <option value="standard">Standard (all minor/patch updates)</option>
-            <option value="disaster">Disaster (security fixes only)</option>
-          </select>
-        </label>
+        <div class="update-mode" data-tour="mode">
+          <span>Mode</span>
+          <button type="button" class="mode-label" class:on={config.UpdateMode !== 'disaster'} onclick={() => setMode('standard')}>Standard</button>
+          <button type="button" role="switch" class="mode-switch" aria-label="Disaster mode (security fixes only)" aria-checked={config.UpdateMode === 'disaster'} onclick={() => setMode(config.UpdateMode === 'disaster' ? 'standard' : 'disaster')}><span class="knob"></span></button>
+          <button type="button" class="mode-label" class:on={config.UpdateMode === 'disaster'} onclick={() => setMode('disaster')}>Disaster</button>
+          <span class="mode-hint">{config.UpdateMode === 'disaster' ? 'security fixes only' : 'all minor and patch updates'}</span>
+        </div>
         <button class="btn-primary" data-tour="start" onclick={startUpdate} disabled={!projects.some(p => selected[p.name])}>
           Update Selected
         </button>
@@ -437,43 +475,30 @@
 
   {:else if view === 'config'}
     <section class="panel config-panel">
-      <div class="settings-section">
+      <div class="settings-layout">
+        <nav class="settings-tabs" role="tablist" aria-orientation="vertical">
+          {#each TABS as [key, label]}
+            <button type="button" role="tab" aria-selected={settingsTab === key} class:on={settingsTab === key} onclick={() => settingsTab = key}>{label}</button>
+          {/each}
+        </nav>
+        <div class="settings-content">
+      <div class="settings-section" hidden={settingsTab !== 'appearance'}>
         <div class="section-head">
           <h3>Appearance</h3>
           <p class="hint">Applies immediately, stored on this machine.</p>
         </div>
-        <div class="section-body two-col">
-          <label class="field">
-            Theme
-            <select bind:value={theme}>
-              <option value="system">Follow system</option>
-              <option value="light">Light</option>
-              <option value="dark">Dark</option>
-            </select>
-          </label>
-          <label class="field">
-            Font size
-            <select bind:value={fontSize}>
-              <option value="14">Small</option>
-              <option value="16">Default</option>
-              <option value="18">Large</option>
-              <option value="20">Extra large</option>
-            </select>
-          </label>
+        <div class="section-body">
+          {@render seg('Theme', THEMES, theme, v => theme = v)}
+          {@render seg('Font', FONT_ITEMS, font, v => font = v)}
+          {@render seg('Font size', SIZES, fontSize, v => fontSize = v)}
           <div class="field">
-            Tutorial
-            <button class="btn-sm" onclick={() => showStep(0)}>Show tutorial again</button>
+            <span>Tutorial</span>
+            <button class="btn-sm replay" onclick={() => showStep(0)}>Show tutorial again</button>
           </div>
-          <label class="field">
-            Font
-            <select bind:value={font}>
-              {#each Object.entries(FONTS) as [key, f]}<option value={key}>{f.label}</option>{/each}
-            </select>
-          </label>
         </div>
       </div>
 
-      <div class="settings-section" data-tour="folders">
+      <div class="settings-section" hidden={settingsTab !== 'projects'} data-tour="folders">
         <div class="section-head">
           <h3>Projects</h3>
           <p class="hint">Where Drupal projects are found.</p>
@@ -505,7 +530,7 @@
         </div>
       </div>
 
-      <div class="settings-section">
+      <div class="settings-section" hidden={settingsTab !== 'branches'}>
         <div class="section-head">
           <h3>Branch defaults</h3>
           <p class="hint">For every project. Project overrides and a repo's <code>drupal-updater.yaml</code> win.</p>
@@ -530,7 +555,7 @@
         </div>
       </div>
 
-      <div class="settings-section" data-tour="claude">
+      <div class="settings-section" hidden={settingsTab !== 'claude'} data-tour="claude">
         <div class="section-head">
           <h3>Claude</h3>
           <p class="hint">The session that runs each update.</p>
@@ -570,7 +595,7 @@
         </div>
       </div>
 
-      <div class="settings-section">
+      <div class="settings-section" hidden={settingsTab !== 'overrides'}>
         <div class="section-head">
           <h3>Project overrides</h3>
           <p class="hint">Local to this machine. A committed <code>drupal-updater.yaml</code> wins per field; "Save to repo" writes one for the team.</p>
@@ -639,6 +664,9 @@
               <button class="btn-sm" onclick={addProject} disabled={!newProjectName}>+ Add</button>
             </div>
           </div>
+        </div>
+      </div>
+
         </div>
       </div>
 
@@ -765,6 +793,7 @@
     --danger: #c70522;
     --danger-bg: #fde8eb;
     --success: #14703f;
+    --warn: #c76a00;
     --success-bg: #dff1e7;
     --running: var(--blue);
     --running-bg: #dcf0fb;
@@ -797,6 +826,7 @@
     --danger: #ff5a73;
     --danger-bg: #3a0f22;
     --success: #5fd39a;
+    --warn: #ffb454;
     --success-bg: #0d2e2a;
     --running: var(--sky);
     --running-bg: #0b2a4d;
@@ -895,8 +925,9 @@
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
   }
   .welcome-wrap { position: fixed; inset: 0; z-index: 102; display: grid; place-items: center; pointer-events: none; }
-  .tour-card.welcome { position: static; width: 380px; pointer-events: auto; }
-  .welcome-fields { display: grid; gap: 12px; margin-top: 14px; }
+  .tour-card.welcome { position: static; width: 540px; pointer-events: auto; }
+  .welcome-fields { display: grid; gap: 14px; margin-top: 14px; }
+  .welcome-fields .seg { flex-wrap: wrap; }
   .tour-card h3 { margin: 4px 0 6px; }
   .tour-card p { font-size: 0.9rem; line-height: 1.45; }
   .tour-count { font-size: 0.72rem; color: var(--text-muted); }
@@ -939,18 +970,43 @@
   }
 
   /* Settings is long: scroll the whole panel instead of clipping it */
-  .config-panel {
-    overflow-y: auto;
-    display: block;
-  }
+  /* tabs scroll; the Save bar stays pinned to the bottom of the window */
+  .config-panel { gap: 0; }
+  .config-panel .settings-layout { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: 14px; }
+  .config-panel .footer-actions { flex: none; }
   .settings-section {
     display: grid;
-    grid-template-columns: 170px 1fr;
-    gap: 20px;
-    padding: 18px 0;
-    border-bottom: 1px solid var(--border);
+    grid-template-columns: 1fr; /* the tab names the section, head sits above the fields */
+    gap: 14px;
+    padding: 20px;
+    margin-bottom: 14px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
   }
-  .settings-section:first-child { padding-top: 4px; }
+  .settings-layout { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 20px; align-items: start; }
+  .settings-tabs { position: sticky; top: 0; display: flex; flex-direction: column; gap: 2px; }
+  .settings-tabs button {
+    text-align: left; background: none; border: 0; border-radius: 8px; padding: 9px 12px;
+    font: 600 0.88rem var(--font-body); color: var(--text-muted); cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  .settings-tabs button:hover { background: var(--hover); color: var(--text); }
+  .settings-tabs button.on { background: var(--selected); color: var(--text); box-shadow: inset 3px 0 0 var(--accent); }
+  .settings-section[hidden] { display: none; }
+  .seg {
+    display: inline-flex; align-self: flex-start; padding: 3px; gap: 2px;
+    background: var(--bg); border: 1px solid var(--border-strong); border-radius: 10px;
+  }
+  .seg button {
+    background: none; border: 0; border-radius: 7px; padding: 6px 14px;
+    font: 600 0.85rem var(--font-body); color: var(--text-muted); cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  .seg-sm button { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; font-size: 0.78rem; }
+  .seg button:hover { color: var(--text); }
+  .seg button.on { background: var(--accent); color: var(--on-accent); }
+  .replay { align-self: flex-start; }
   .section-head h3 { margin: 0 0 4px; }
   .section-head .hint { margin: 0; }
   .section-body { display: grid; gap: 12px 16px; min-width: 0; }
@@ -980,25 +1036,23 @@
   }
   @media (max-width: 760px) {
     .settings-section { grid-template-columns: 1fr; gap: 10px; }
+    .settings-layout { grid-template-columns: 1fr; }
+    .settings-tabs { position: static; flex-direction: row; flex-wrap: wrap; }
     .two-col, .three-col { grid-template-columns: 1fr; }
     .span-2 { grid-column: auto; }
   }
   .config-panel .project-configs {
     overflow: visible;
   }
-  .config-panel .footer-actions {
-    position: sticky;
-    bottom: 0;
-    background: var(--bg);
-    padding: 12px 0;
-    margin-bottom: 0;
-  }
+  .config-panel .footer-actions { padding-top: 12px; margin-bottom: 0; }
 
   .panel-header {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 12px;
   }
+  .panel-header .actions { margin-left: auto; }
 
   .project-list, .status-list {
     list-style: none;
@@ -1023,13 +1077,22 @@
     box-shadow: inset 3px 0 0 var(--accent);
   }
 
+  /* fixed columns so version and path line up on every row */
   .project-list label {
-    display: flex;
+    display: grid;
+    grid-template-columns: 16px clamp(8rem, 30%, 16rem) 6.5rem minmax(0, 1fr);
     align-items: center;
-    gap: 10px;
+    gap: 12px;
     padding: 10px 14px;
     cursor: pointer;
   }
+  .project-list .namecell { display: flex; align-items: center; gap: 8px; min-width: 0; }
+
+  .project-list .core { display: inline-flex; align-items: center; gap: 6px; font: 0.78rem var(--font-mono); color: var(--text-muted); opacity: 0.8; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); flex: none; }
+  .dot-current { background: var(--success); }
+  .dot-behind { background: var(--warn); }
+  .dot-security { background: var(--danger); }
 
   .project-list input[type="checkbox"] {
     accent-color: var(--accent);
@@ -1040,17 +1103,23 @@
   .project-list .name {
     font-weight: 600;
     color: var(--text);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
+  .project-list .badge { flex: none; }
 
   .project-list .path {
     font-family: var(--font-mono);
     font-size: 0.72rem;
     color: var(--text-muted);
-    margin-left: auto;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    direction: rtl;
+    text-align: right;
   }
 
   .status-list li { border-bottom: 1px solid var(--border); }
@@ -1148,11 +1217,25 @@
   .update-mode {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
     font-size: 0.82rem;
     font-weight: 600;
     color: var(--text-muted);
   }
+  .mode-label { background: none; border: 0; padding: 0; font: inherit; color: var(--text-muted); cursor: pointer; }
+  .mode-label.on { color: var(--text); }
+  .mode-switch {
+    position: relative; width: 40px; height: 22px; padding: 0; flex: none;
+    border-radius: 11px; border: 1px solid var(--border-strong); background: var(--surface); cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .mode-switch[aria-checked='true'] { background: var(--accent); border-color: var(--accent); }
+  .mode-switch .knob {
+    position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+    background: var(--text); transition: transform 0.15s;
+  }
+  .mode-switch[aria-checked='true'] .knob { transform: translateX(18px); background: var(--on-accent); }
+  .mode-hint { font-weight: 400; font-size: 0.78rem; }
 
   input[type="text"], input[type="number"], textarea, select {
     background: var(--surface);

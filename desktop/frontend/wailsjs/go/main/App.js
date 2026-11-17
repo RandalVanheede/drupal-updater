@@ -14,6 +14,10 @@ export function CleanupBranch(arg1) {
   return window['go']['main']['App']['CleanupBranch'](arg1);
 }
 
+export function CoreStatuses(arg1) {
+  return window['go']['main']['App']['CoreStatuses'](arg1);
+}
+
 export function DiscoverProjects() {
   return window['go']['main']['App']['DiscoverProjects']();
 }

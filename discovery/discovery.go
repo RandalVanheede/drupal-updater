@@ -138,3 +138,29 @@ func Find(projects []Project, name string) (Project, bool) {
 	}
 	return Project{}, false
 }
+
+// CoreVersion returns the installed Drupal core version from the project's composer.lock
+// ("11.1.2"), or "" when there is no lock file or no core in it.
+func CoreVersion(dir string) string {
+	data, err := os.ReadFile(filepath.Join(dir, "composer.lock"))
+	if err != nil {
+		return ""
+	}
+	var lock struct {
+		Packages []struct {
+			Name    string `json:"name"`
+			Version string `json:"version"`
+		} `json:"packages"`
+	}
+	if json.Unmarshal(data, &lock) != nil {
+		return ""
+	}
+	for _, name := range []string{"drupal/core", "drupal/cms"} {
+		for _, p := range lock.Packages {
+			if p.Name == name {
+				return strings.TrimPrefix(p.Version, "v")
+			}
+		}
+	}
+	return ""
+}

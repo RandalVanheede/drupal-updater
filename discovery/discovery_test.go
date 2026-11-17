@@ -101,3 +101,18 @@ func TestDiscoverProjectsDepth(t *testing.T) {
 		t.Errorf("depth 2: got %v, %v", p, err)
 	}
 }
+
+func TestCoreVersion(t *testing.T) {
+	dir := t.TempDir()
+	if v := CoreVersion(dir); v != "" {
+		t.Fatalf("no lock file: got %q", v)
+	}
+	os.WriteFile(filepath.Join(dir, "composer.lock"), []byte(`{"packages":[{"name":"drupal/token","version":"1.2.0"},{"name":"drupal/core","version":"11.1.2"}]}`), 0o644)
+	if v := CoreVersion(dir); v != "11.1.2" {
+		t.Fatalf("got %q", v)
+	}
+	os.WriteFile(filepath.Join(dir, "composer.lock"), []byte(`{"packages":[{"name":"drupal/core","version":"v10.4.0"}]}`), 0o644)
+	if v := CoreVersion(dir); v != "10.4.0" {
+		t.Fatalf("v prefix: got %q", v)
+	}
+}

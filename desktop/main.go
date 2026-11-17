@@ -11,6 +11,7 @@ import (
 
 	"drupal-updater/api"
 	"drupal-updater/config"
+	"drupal-updater/coreupdates"
 	"drupal-updater/discovery"
 	"drupal-updater/executor"
 	"drupal-updater/logging"
@@ -38,8 +39,10 @@ type App struct {
 	cancels    map[string]context.CancelFunc // running projects
 	pending    int                           // projects started and not yet finished
 	sem        chan struct{}
-	summaries  map[string]string // last successful run's summary per project, used as merge request description
-	update     *updater.Release  // newer release found by the daily check
+	summaries  map[string]string     // last successful run's summary per project, used as merge request description
+	update     *updater.Release      // newer release found by the daily check
+	releases   []coreupdates.Release // Drupal core release history, cached
+	relFetched time.Time
 }
 
 func NewApp() *App {
@@ -111,6 +114,7 @@ type ProjectInfo struct {
 	Name     string `json:"name"`
 	Path     string `json:"path"`
 	RepoFile bool   `json:"repoFile"` // has a committed drupal-updater.yaml
+	Core     string `json:"core"`     // installed Drupal core version from composer.lock, "" if unknown
 }
 
 func (a *App) DiscoverProjects() ([]ProjectInfo, error) {
@@ -121,9 +125,39 @@ func (a *App) DiscoverProjects() ([]ProjectInfo, error) {
 	result := make([]ProjectInfo, len(projects))
 	for i, p := range projects {
 		_, err := os.Stat(filepath.Join(p.Path, config.ProjectFile))
-		result[i] = ProjectInfo{Name: p.Name, Path: p.Path, RepoFile: err == nil}
+		result[i] = ProjectInfo{Name: p.Name, Path: p.Path, RepoFile: err == nil, Core: discovery.CoreVersion(p.Path)}
 	}
 	return result, nil
+}
+
+// CoreStatuses compares installed core versions with Drupal's published releases. The release history
+// is cached for an hour; when it cannot be fetched (offline) the map is empty and the UI shows no dots.
+func (a *App) CoreStatuses(versions []string) map[string]coreupdates.Result {
+	a.mu.Lock()
+	stale := a.releases == nil || time.Since(a.relFetched) > time.Hour
+	a.mu.Unlock()
+	if stale {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		rels, err := coreupdates.Fetch(ctx)
+		if err != nil {
+			logging.Info("core release history: %v", err)
+		} else {
+			a.mu.Lock()
+			a.releases, a.relFetched = rels, time.Now()
+			a.mu.Unlock()
+		}
+	}
+	a.mu.Lock()
+	rels := a.releases
+	a.mu.Unlock()
+	out := map[string]coreupdates.Result{}
+	for _, v := range versions {
+		if r, ok := coreupdates.Check(v, rels); ok {
+			out[v] = r
+		}
+	}
+	return out
 }
 
 func (a *App) GetConfig() *config.Config {
