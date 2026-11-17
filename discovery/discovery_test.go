@@ -18,6 +18,8 @@ func TestDiscoverProjects(t *testing.T) {
 	drupalSite(filepath.Join(base, "composer-site"))
 	drupalSite(filepath.Join(base, "old-site"))
 	os.MkdirAll(filepath.Join(base, "ddev-only", ".ddev"), 0o755)
+	os.MkdirAll(filepath.Join(base, "module"), 0o755)
+	os.WriteFile(filepath.Join(base, "module", "composer.json"), []byte(`{"type":"drupal-module","require":{"drupal/core":"^11"}}`), 0o644)
 	os.MkdirAll(filepath.Join(base, "laravel"), 0o755)
 	os.WriteFile(filepath.Join(base, "laravel", "composer.json"), []byte(`{"require":{"laravel/framework":"^11"}}`), 0o644)
 	os.MkdirAll(filepath.Join(base, "not-a-project"), 0o755)

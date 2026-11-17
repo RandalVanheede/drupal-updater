@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,10 +34,26 @@ func DiscoverProjects(baseFolders, projectPaths, excludedProjects []string, dept
 		}
 		return false
 	}
-	// A Drupal project requires drupal/core (or a distribution/CMS that pulls it in) in its composer.json.
+	// A Drupal site requires drupal/core* (or drupal/cms) and is not itself a Drupal package:
+	// modules, themes and profiles (type "drupal-*") require core too, but only as a constraint.
 	isProject := func(dir string) bool {
 		data, err := os.ReadFile(filepath.Join(dir, "composer.json"))
-		return err == nil && (strings.Contains(string(data), `"drupal/core`) || strings.Contains(string(data), `"drupal/cms"`))
+		if err != nil {
+			return false
+		}
+		var c struct {
+			Type    string            `json:"type"`
+			Require map[string]string `json:"require"`
+		}
+		if json.Unmarshal(data, &c) != nil || strings.HasPrefix(c.Type, "drupal-") {
+			return false
+		}
+		for pkg := range c.Require {
+			if strings.HasPrefix(pkg, "drupal/core") || pkg == "drupal/cms" {
+				return true
+			}
+		}
+		return false
 	}
 
 	var paths []string

@@ -111,7 +111,7 @@ One-time setup: `go run ./scripts/sign -genkey`, store the private key as the Gi
 
 ## Auto-Detection
 
-On startup the app scans every base folder for subdirectories (down to `scan_depth` levels) whose `composer.json` requires `drupal/core*` (core, recommended, dev, …) or `drupal/cms`. Non-Drupal projects and folders with only a `.ddev/` are ignored.
+On startup the app scans every base folder for subdirectories (down to `scan_depth` levels) whose `composer.json` requires `drupal/core*` (core, recommended, dev, …) or `drupal/cms` and is not itself a Drupal module, theme or profile (`type: drupal-*`). Other projects and folders with only a `.ddev/` are ignored.
 
 Each match, plus every `project_paths` entry, becomes a selectable project. A project is named after its folder; when two projects share a folder name, both are shown as `<parent>/<folder>` (or the full path if that still clashes). That name is also the key under `projects:`, so settings stored under the plain folder name must be moved when a duplicate appears.
 

@@ -26,6 +26,7 @@ export namespace config {
 	}
 	export class Config {
 	    BaseFolders: string[];
+	    ScanDepth: number;
 	    ProjectPaths: string[];
 	    MaxConcurrent: number;
 	    UpdateMode: string;
@@ -45,6 +46,7 @@ export namespace config {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.BaseFolders = source["BaseFolders"];
+	        this.ScanDepth = source["ScanDepth"];
 	        this.ProjectPaths = source["ProjectPaths"];
 	        this.MaxConcurrent = source["MaxConcurrent"];
 	        this.UpdateMode = source["UpdateMode"];
