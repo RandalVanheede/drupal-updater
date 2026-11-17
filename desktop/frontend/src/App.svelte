@@ -344,7 +344,7 @@
         <div class="section-body two-col">
           <label class="field">
             Start branch
-            <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="master" bind:value={config.Defaults.GitStartBranch} />
+            <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="master|main" bind:value={config.Defaults.GitStartBranch} />
           </label>
           <label class="field">
             Final branch pattern <span class="hint">{'{date}'}, * = project</span>

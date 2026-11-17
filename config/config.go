@@ -57,7 +57,7 @@ const DefaultBranchPattern = "hotfix/{date}-drupal-updates"
 
 func DefaultProjectConfig() ProjectConfig {
 	return ProjectConfig{
-		GitStartBranch:      "master",
+		GitStartBranch:      "master|main",
 		GitNewBranchPattern: DefaultBranchPattern,
 	}
 }

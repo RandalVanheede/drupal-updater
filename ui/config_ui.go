@@ -134,7 +134,7 @@ func (cm *configModel) globalFields() []field {
 	add("Projects", "Update mode", func() string { return orText(c.UpdateMode, "standard") }, s, field{options: []string{"standard", "disaster"}})
 
 	g, s = str(&d.GitStartBranch)
-	add("Branch defaults", "Start branch", g, s, field{placeholder: "master"})
+	add("Branch defaults", "Start branch", g, s, field{placeholder: "master|main"})
 	g, s = str(&d.GitNewBranchPattern)
 	add("Branch defaults", "Final branch pattern", g, s, field{placeholder: config.DefaultBranchPattern})
 	g, s = str(&d.GitMergeTarget)

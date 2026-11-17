@@ -67,6 +67,12 @@ func TestResolveStartBranch(t *testing.T) {
 	if got := ResolveStartBranch(dir, "main"); got != "main" {
 		t.Errorf("got %q", got)
 	}
+	if got := ResolveStartBranch(dir, "master|main"); got != "main" {
+		t.Errorf("got %q", got)
+	}
+	if got := ResolveStartBranch(dir, "main|master"); got != "main" {
+		t.Errorf("got %q", got)
+	}
 }
 
 func TestCleanupAndResolveRejectUnsafeNames(t *testing.T) {

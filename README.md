@@ -46,7 +46,7 @@ project_paths:                          # single projects outside the base folde
 
 projects:
   my-drupal-site:
-    git_start_branch: main              # default: master
+    git_start_branch: main              # default: master|main
     git_new_branch_pattern: "release/{date}-*"  # {date} = YYYY-MM-DD, * = project slug
     ignored_packages:
       - drupal/some-module
@@ -87,7 +87,7 @@ Per field the order is: the repo's `drupal-updater.yaml`, the project's `project
 
 | Setting                  | Default                         |
 |--------------------------|---------------------------------|
-| `git_start_branch`       | `master`                        |
+| `git_start_branch`       | `master\|main` (first that exists) |
 | `git_new_branch_pattern` | `hotfix/{date}-drupal-updates`  |
 
 The final branch name is pre-filled from the pattern and can be edited before the rename. If that branch already exists (a second run on the same day) `-2`, `-3`, ... is appended. The old default `hotfix/*` is treated as the new default.

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -49,7 +50,7 @@ func MergeRequest(ctx context.Context, name, path, branch string, pc config.Proj
 		return "", fmt.Errorf("refusing unsafe branch name %q / %q", branch, target)
 	}
 	// never commit to or push a shared branch, or a run's temp branch
-	if branch == target || branch == ResolveStartBranch(path, pc.GitStartBranch) || strings.HasPrefix(branch, "drupal-updater/temp-") {
+	if branch == target || slices.Contains(strings.Split(strings.ReplaceAll(pc.GitStartBranch, " ", ""), "|"), branch) || branch == ResolveStartBranch(path, pc.GitStartBranch) || strings.HasPrefix(branch, "drupal-updater/temp-") {
 		return "", fmt.Errorf("refusing to open a merge request from %q: pick the renamed update branch", branch)
 	}
 	if _, err := git(path, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch); err != nil {

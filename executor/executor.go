@@ -95,8 +95,9 @@ func git(dir string, args ...string) (string, error) {
 	return string(out), err
 }
 
-// ResolveStartBranch returns configured if it exists locally, else the remote's
-// default branch (origin/HEAD), else main/master, else configured unchanged.
+// ResolveStartBranch takes configured as a "|"-separated list ("master|main") and
+// returns the first that exists locally, else the remote's default branch
+// (origin/HEAD), else main/master, else the first listed name unchanged.
 // Only names matching safeBranch are ever returned from repo-derived data.
 func ResolveStartBranch(projectPath, configured string) string {
 	exists := func(b string) bool {
@@ -106,8 +107,12 @@ func ResolveStartBranch(projectPath, configured string) string {
 		_, err := git(projectPath, "rev-parse", "--verify", "--quiet", "refs/heads/"+b)
 		return err == nil
 	}
-	if exists(configured) {
-		return configured
+	names := strings.Split(configured, "|")
+	for i, b := range names {
+		names[i] = strings.TrimSpace(b)
+		if exists(names[i]) {
+			return names[i]
+		}
 	}
 	if out, err := git(projectPath, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil {
 		if b := strings.TrimPrefix(strings.TrimSpace(out), "origin/"); exists(b) {
@@ -119,7 +124,7 @@ func ResolveStartBranch(projectPath, configured string) string {
 			return b
 		}
 	}
-	return configured
+	return names[0]
 }
 
 // RenameBranch renames oldBranch to newBranch without a shell. newBranch is

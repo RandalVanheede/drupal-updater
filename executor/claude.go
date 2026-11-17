@@ -249,6 +249,7 @@ type claudeResult struct {
 // promptTmpl is filled with the placeholders below plus the extra old/new pairs. With empty start/temp
 // branches nothing is cleaned up on failure and the branch is not checked on success.
 func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, out chan<- StatusUpdate, promptTmpl string, extra ...string) {
+	startBranch = ResolveStartBranch(path, startBranch)
 	session := SessionName(name)
 	// Terminal statuses are sent only after the session is dead and the repo is settled.
 	send := func(status, command, output string) {

@@ -10,7 +10,7 @@ import (
 func TestMergeWithDefaults(t *testing.T) {
 	pc := ProjectConfig{}
 	pc.MergeWithDefaults()
-	if pc.GitStartBranch != "master" || pc.GitNewBranchPattern != DefaultBranchPattern {
+	if pc.GitStartBranch != "master|main" || pc.GitNewBranchPattern != DefaultBranchPattern {
 		t.Fatalf("defaults not applied: %+v", pc)
 	}
 
