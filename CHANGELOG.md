@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [1.0.8] - 2026-11-17
+### Fixed
+- Claude no longer stops on the "Adding a new directory" trust prompt for the run's `out` folder (seen on Linux); it is pre-trusted like the project folder.
+
 ## [1.0.7] - 2026-11-17
 ### Fixed
 - Auto-detection no longer lists Drupal modules, themes and profiles (composer `type: drupal-*`) that merely require a `drupal/core` version.
@@ -82,7 +86,8 @@ First versioned release.
 - Classic mode: the configured shell commands with retries and auto-healing, no Claude.
 - Build scripts for macOS (`scripts/build-dmg.sh`) and Linux amd64/arm64 (`scripts/build-linux.sh`, `scripts/build-linux-docker.sh`), and a CI pipeline that builds them for each release tag.
 
-[Unreleased]: https://github.com/RandalVanheede/drupal-updater/compare/v1.0.5...1.0.x
+[Unreleased]: https://github.com/RandalVanheede/drupal-updater/compare/v1.0.8...1.0.x
+[1.0.8]: https://github.com/RandalVanheede/drupal-updater/compare/v1.0.7...v1.0.8
 [1.0.7]: https://github.com/RandalVanheede/drupal-updater/compare/v1.0.6...v1.0.7
 [1.0.6]: https://github.com/RandalVanheede/drupal-updater/compare/v1.0.5...v1.0.6
 [1.0.5]: https://github.com/RandalVanheede/drupal-updater/compare/v1.0.4...v1.0.5
