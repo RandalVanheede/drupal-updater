@@ -6,6 +6,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-11-17
+### Changed
+- Desktop app: a project's Drupal core version (and its status dot) is read from `composer.lock` on origin's start branch instead of the working tree, so a stale local checkout no longer shows as out of date. Origin is fetched at most once per 24 hours per project (by the age of git's `FETCH_HEAD`); a failed fetch is not retried until the app restarts.
+- Desktop app: a Refresh button next to "Toggle All" fetches every project now and downloads Drupal's release list again.
+
 ## [1.2.0] - 2026-11-17
 ### Added
 - Desktop app: each project shows its installed Drupal core version (from `composer.lock`) with a status dot: green is the newest release, orange is behind without a security update, red needs a security update. The status comes from Drupal's release history (updates.drupal.org, cached for an hour; offline simply shows no dots).
