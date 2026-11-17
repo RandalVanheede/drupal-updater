@@ -284,8 +284,10 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 		os.Remove(f)
 	}
 	tmux("kill-session", "-t", "="+session) // stale session from an earlier run
-	if err := trustFolder(path); err != nil {
-		logging.Error("[%s] could not pre-trust folder: %v", name, err) // falls back to the trust-prompt detection below
+	for _, dir := range []string{path, outDir} { // outDir too: newer Claude prompts for untrusted --add-dir folders
+		if err := trustFolder(dir); err != nil {
+			logging.Error("[%s] could not pre-trust %s: %v", name, dir, err) // falls back to the trust-prompt detection below
+		}
 	}
 
 	proj := config.ForProject(claudeCfg.projects.Project(name), path)
@@ -403,8 +405,8 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 			default:
 			}
 		}
-		if strings.Contains(pane, "trust this folder") {
-			fail(fmt.Sprintf("Claude does not trust %s yet. Run `claude` once in that folder, accept the prompt, then retry.", path))
+		if strings.Contains(pane, "trust this folder") || strings.Contains(pane, "Adding a new directory") {
+			fail(fmt.Sprintf("Claude does not trust %s (or %s) yet. Run `claude` once in that folder, accept the prompt, then retry.", path, outDir))
 			return
 		}
 		if !notifiedPrompt && strings.Contains(pane, "requires approval") {
