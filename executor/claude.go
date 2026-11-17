@@ -284,10 +284,11 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 		os.Remove(f)
 	}
 	tmux("kill-session", "-t", "="+session) // stale session from an earlier run
-	for _, dir := range []string{path, outDir} { // outDir too: newer Claude prompts for untrusted --add-dir folders
-		if err := trustFolder(dir); err != nil {
-			logging.Error("[%s] could not pre-trust %s: %v", name, dir, err) // falls back to the trust-prompt detection below
-		}
+	if err := trustFolder(path); err != nil {
+		logging.Error("[%s] could not pre-trust folder: %v", name, err) // falls back to the trust-prompt detection below
+	}
+	if err := trustExact(outDir); err != nil { // newer Claude prompts for untrusted --add-dir folders
+		logging.Error("[%s] could not pre-trust %s: %v", name, outDir, err)
 	}
 
 	proj := config.ForProject(claudeCfg.projects.Project(name), path)

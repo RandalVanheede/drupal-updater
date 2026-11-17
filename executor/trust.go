@@ -19,6 +19,11 @@ func trustFolder(path string) error {
 	if out, err := git(path, "rev-parse", "--show-toplevel"); err == nil && strings.TrimSpace(out) != "" {
 		root = strings.TrimSpace(out)
 	}
+	return trustExact(root)
+}
+
+// trustExact trusts exactly this folder, no git-root lookup: a git repo around it (e.g. dotfiles in $HOME) must not widen the grant.
+func trustExact(root string) error {
 	if r, err := filepath.EvalSymlinks(root); err == nil {
 		root = r
 	}
