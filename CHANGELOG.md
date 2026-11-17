@@ -6,6 +6,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-17
+### Added
+- Desktop app: optional connection to the applications dashboard (MCP server). Sign in once through the browser (OAuth with PKCE, read-only); each matched project then shows its SLA with a detail card on hover (customer, account manager, PHP, last scan, end-of-life runtimes, every pending security module) and a link to its dashboard page. Filter the list by SLA. The address defaults to the Dynamate dashboard (`dashboard_url`); tokens live in `~/.config/drupal-updater/dashboard.json` (0600).
+- Local projects are matched to dashboard projects by name, and otherwise detected from the git remote's group, the DDEV project name and the Drupal site name. Detected matches are listed in Settings → Dashboard with the reason and can be saved; unmatched projects get suggestions and a picker. A match is saved as `dashboard_project` in the project's `drupal-updater.yaml` (or a local project override).
+- Desktop and TUI: each project shows its installed Drupal core version with a status marker (green newest release, orange behind, red security update), read from `composer.lock` on origin's start branch. Origin is fetched at most once per 24 hours per project; a Refresh button (desktop) or `r` (TUI) fetches now. Desktop: filter by update status.
+- Desktop: Settings redesign with vertical tabs, a Save bar that stays put and no longer leaves the page, "Unsaved changes" marker, folder pickers with removable entries, sliders for scan depth, concurrency (coloured by load) and timeout, ordered start-branch list, exclusion list, a live count of the projects the settings find, a Standard/Disaster switch, and Appearance (theme, font, font size). First launch asks for the appearance and runs a short tour (replay with `?`). The window size is remembered and the macOS title bar is integrated.
+
+### Fixed
+- A run that fails or times out keeps the commits it made on a `drupal-updater/failed-<project>-<time>` branch instead of deleting them.
+- An unreadable `config.yaml` is kept as `config.yaml.bad-<time>` instead of being overwritten by defaults on the next save; config and window-size files are written atomically.
+- Cancel All also cancels running merge requests; closing the window while updates run asks first.
+- The tour's Enter key advanced twice; several error states in the desktop app were silent.
+
+### Security
+- The automatic `git fetch` only honours an ssh command from the user's own git config, never one written into the repository's `.git/config`.
+- The dashboard's project links are only opened when they are https on the dashboard's own host; sign-in ignores callbacks that do not carry its state, and token requests never follow redirects to another host.
+
 ## [1.2.1] - 2026-11-17
 ### Changed
 - Desktop app: a project's Drupal core version (and its status dot) is read from `composer.lock` on origin's start branch instead of the working tree, so a stale local checkout no longer shows as out of date. Origin is fetched at most once per 24 hours per project (by the age of git's `FETCH_HEAD`); a failed fetch is not retried until the app restarts.
