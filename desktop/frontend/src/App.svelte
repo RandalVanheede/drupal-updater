@@ -12,8 +12,7 @@
   let statuses = $state({});
   let logs = $state({});
   let screens = $state({}); // live Claude terminal per project
-  let notStarted = {}; // projects that failed before running (discovery), so confirm must not clean up their branch
-  let allDone = $state(false);
+  let notStarted = $state({}); // projects that failed before running (discovery), so confirm must not clean up their branch
   let detailProject = $state('');
 
   let editingProject = $state(null);
@@ -25,7 +24,6 @@
 
   let branchNames = $state({});
   let confirmResults = $state({});
-  let confirmDone = $state(false);
   let prevView = $state('');
   let merges = $state({}); // project -> {state: working|done|failed, message, url}
   let repoSaved = $state({}); // project -> result of writing drupal-updater.yaml
@@ -39,7 +37,12 @@
       const name = update.project || update.Project || update.ProjectName;
       if (!name) return;
       if (update.screen) { screens[name] = update.screen; return; } // live view, not a log line
-      statuses[name] = update.status || update.Status;
+      const status = update.status || update.Status;
+      statuses[name] = status;
+      // Pre-fill the branch name from the project's pattern as soon as it succeeds (backend skips names already taken)
+      if (status === 'success' && !branchNames[name]) {
+        FinalBranch(name).then(b => { if (!branchNames[name]) branchNames[name] = b; }).catch(() => {});
+      }
       const cmd = update.command || update.Command;
       if (cmd === 'discover') notStarted[name] = true; // never ran: no temp branch of this run to clean up
       const out = update.output || update.Output;
@@ -54,15 +57,6 @@
     EventsOn('update-available', (r) => { update = r; });
     version = await GetVersion();
     update = (await GetUpdate()) || update;
-
-    EventsOn('all-done', async () => {
-      allDone = true;
-      // Pre-fill branch names from each project's pattern (backend skips names already taken)
-      await Promise.all(Object.keys(statuses).map(async name => {
-        branchNames[name] = await FinalBranch(name).catch(() => '');
-      }));
-      view = 'confirm';
-    });
 
     const loaded = await GetConfig();
     claudeDefaults = await GetClaudeDefaults();
@@ -106,26 +100,11 @@
   }
 
   function doStart() {
-    const active = n => statuses[n] === 'running' || statuses[n] === 'idle';
-    // projects still running keep their state and logs; only new picks are (re)started
+    // running projects and ones with a merge request in flight are left alone; every other row keeps its state
+    const active = n => statuses[n] === 'running' || statuses[n] === 'idle' || merges[n]?.state === 'working' || confirmResults[n] === '…';
     const selectedNames = projects.filter(p => selected[p.name] && !active(p.name)).map(p => p.name);
     if (selectedNames.length === 0) return;
-    const keep = Object.keys(statuses).filter(active);
-    const kept = Object.fromEntries(keep.map(n => [n, statuses[n]]));
-    const keptLogs = Object.fromEntries(keep.map(n => [n, logs[n]]));
-    statuses = kept;
-    logs = keptLogs;
-    selectedNames.forEach(n => delete notStarted[n]);
-    allDone = false;
-    confirmDone = false;
-    confirmResults = {};
-    merges = {};
-    branchNames = {};
-    selectedNames.forEach(name => {
-      statuses[name] = 'idle';
-      logs[name] = '';
-      delete screens[name];
-    });
+    selectedNames.forEach(resetRow);
 
     view = 'running';
     isRunning = true;
@@ -167,25 +146,38 @@
     if (editingProject === name) editingProject = null;
   }
 
-  async function runConfirmation() {
-    confirmResults = {};
-    for (const name of Object.keys(statuses)) {
-      try {
-        if (notStarted[name]) {
-          confirmResults[name] = '– not started';
-        } else if (statuses[name] === 'success') {
-          await RenameBranch(name, branchNames[name]);
-          confirmResults[name] = '✓ renamed';
-        } else {
-          await CleanupBranch(name);
-          confirmResults[name] = '✓ cleaned up';
-        }
-      } catch (e) {
-        confirmResults[name] = '✗ ' + (e?.message || e);
+  const finished = n => ['success', 'failed', 'cancelled'].includes(statuses[n]);
+  const done = n => !!confirmResults[n] && !confirmResults[n].startsWith('✗'); // '…' = in flight
+  const busy = $derived(Object.values(statuses).some(s => s === 'running' || s === 'idle'));
+
+  // Clear a row so it can be (re)started.
+  function resetRow(name) {
+    statuses[name] = 'idle';
+    logs[name] = '';
+    for (const o of [screens, confirmResults, merges, branchNames, notStarted]) delete o[name];
+  }
+
+  // Rename the finished project's branch, or clean it up when it failed. Other projects are untouched.
+  async function confirmProject(name) {
+    if (confirmResults[name] === '…') return;
+    confirmResults[name] = '…';
+    try {
+      if (notStarted[name]) {
+        confirmResults[name] = '– not started';
+      } else if (statuses[name] === 'success') {
+        await RenameBranch(name, branchNames[name]);
+        confirmResults[name] = '✓ renamed';
+      } else {
+        await CleanupBranch(name);
+        confirmResults[name] = '✓ cleaned up';
       }
+    } catch (e) {
+      confirmResults[name] = '✗ ' + (e?.message || e);
     }
-    confirmDone = true;
-    isRunning = false;
+  }
+
+  function confirmAll() {
+    Object.keys(statuses).filter(n => finished(n) && !done(n) && !notStarted[n]).forEach(confirmProject);
   }
 
   async function installUpdate() {
@@ -215,22 +207,26 @@
 
   function retryFailed() {
     const failed = Object.keys(statuses).filter(name =>
-      statuses[name] === 'failed' || statuses[name] === 'cancelled'
+      (statuses[name] === 'failed' || statuses[name] === 'cancelled') && !done(name)
     );
     if (failed.length === 0) return;
-
-    failed.forEach(name => {
-      statuses[name] = 'idle';
-      delete notStarted[name];
-      logs[name] = '';
-      delete screens[name];
-    });
-
-    allDone = false;
-    confirmDone = false;
+    failed.forEach(resetRow);
     view = 'running';
-
     RetryProjects(failed);
+  }
+
+  function retryProject(name) {
+    resetRow(name);
+    RetryProjects([name]);
+  }
+
+  // Remove a handled project from the list; leave the running view when nothing is left.
+  function dismiss(name) {
+    for (const o of [statuses, logs, screens, confirmResults, merges, branchNames, notStarted]) delete o[name];
+    if (Object.keys(statuses).length === 0) {
+      isRunning = false;
+      view = 'projects';
+    }
   }
 </script>
 
@@ -241,7 +237,7 @@
       <div class="update-banner">
         <span>{updateMsg || `${update.version} available`}</span>
         {#if update.canInstall && !updateMsg.startsWith('Downloading')}
-          <button class="btn-sm" onclick={installUpdate} disabled={isRunning && !confirmDone}>Update &amp; restart</button>
+          <button class="btn-sm" onclick={installUpdate} disabled={busy || Object.values(confirmResults).includes('…') || Object.values(merges).some(m => m?.state === 'working')}>Update &amp; restart</button>
         {/if}
         <button class="btn-sm" onclick={() => BrowserOpenURL(update.url)}>Release notes ↗</button>
       </div>
@@ -252,8 +248,8 @@
       <button class:active={view === 'projects'} onclick={() => view = 'projects'}>Projects</button>
       <button class:active={view === 'config'} onclick={() => view = 'config'}>Settings</button>
       {#if isRunning}
-        <button class:active={view === 'running' || view === 'confirm'} onclick={() => view = allDone ? 'confirm' : 'running'}>
-          {allDone ? '⚑ Confirm' : '● Running'}
+        <button class:active={view === 'running'} onclick={() => view = 'running'}>
+          {busy ? '● Running' : '⚑ Review'}
         </button>
       {/if}
     </nav>
@@ -482,17 +478,17 @@
     <section class="panel">
       <div class="panel-header">
         <h2>Updating</h2>
-        {#if allDone}
-          <span class="badge badge-success">All done</span>
-        {:else}
+        {#if busy}
           <span class="badge badge-running">In progress...</span>
           <button class="btn-sm btn-danger" onclick={() => CancelAll()}>Cancel All</button>
+        {:else}
+          <span class="badge badge-success">All finished</span>
         {/if}
       </div>
 
       <ul class="status-list">
         {#each Object.keys(statuses) as name}
-          <li class="status-item">
+          <li class="status-item confirm-item">
             <button class="status-btn" onclick={() => { prevView = 'running'; detailProject = name; view = 'detail'; }}>
               <span class="status-indicator status-{statuses[name]}"></span>
               <span class="status-label">{statuses[name].toUpperCase()}</span>
@@ -500,10 +496,56 @@
             </button>
             {#if statuses[name] === 'running'}
               <button class="btn-sm btn-danger cancel-btn" onclick={(e) => { e.stopPropagation(); CancelProject(name); }}>Cancel</button>
+            {:else if finished(name)}
+              {#if done(name)}
+                <span class="confirm-result">{confirmResults[name]}</span>
+                {#if renamed(name)}
+                  {#if merges[name]?.state === 'done'}
+                    <button class="btn-sm" onclick={() => BrowserOpenURL(merges[name].url)}>Open MR ↗</button>
+                  {:else if merges[name]?.state === 'working'}
+                    <span class="merge-msg" title={merges[name].message}>{merges[name].message}</span>
+                    <button class="btn-sm btn-danger" onclick={() => CancelProject(name)}>Cancel</button>
+                  {:else}
+                    {#if merges[name]?.state === 'failed'}<span class="merge-msg merge-failed" title={merges[name].message}>✗ {merges[name].message}</span>{/if}
+                    <button class="btn-sm" onclick={() => openMergeRequest(name)}>{merges[name] ? 'Retry MR' : 'Create MR'}</button>
+                  {/if}
+                {/if}
+                {#if confirmResults[name] !== '…' && merges[name]?.state !== 'working'}
+                  <button class="btn-sm" title="Remove from list" onclick={() => dismiss(name)}>✕</button>
+                {/if}
+              {:else if statuses[name] === 'success'}
+                {#if confirmResults[name]}<span class="confirm-result">{confirmResults[name]}</span>{/if}
+                <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" bind:value={branchNames[name]} class="branch-name-input" />
+                <button class="btn-sm" onclick={() => confirmProject(name)}>Confirm</button>
+              {:else}
+                {#if confirmResults[name]}<span class="confirm-result">{confirmResults[name]}</span>{/if}
+                {#if notStarted[name]}
+                  <span class="cleanup-note">not started</span>
+                {:else}
+                  <span class="cleanup-note">cleanup needed</span>
+                  <button class="btn-sm" onclick={() => confirmProject(name)}>Clean up</button>
+                {/if}
+                <button class="btn-sm" onclick={() => retryProject(name)}>Retry</button>
+                {#if notStarted[name]}<button class="btn-sm" title="Remove from list" onclick={() => dismiss(name)}>✕</button>{/if}
+              {/if}
             {/if}
           </li>
         {/each}
       </ul>
+
+      {#if Object.keys(statuses).some(n => finished(n) && !done(n)) || Object.keys(statuses).some(n => renamed(n) && !merges[n])}
+        <div class="footer-actions">
+          {#if Object.keys(statuses).some(n => (statuses[n] === 'failed' || statuses[n] === 'cancelled') && !done(n))}
+            <button class="btn-sm btn-danger" onclick={retryFailed}>Retry Failed</button>
+          {/if}
+          {#if Object.keys(statuses).some(n => renamed(n) && !merges[n])}
+            <button class="btn-sm" onclick={() => Object.keys(statuses).filter(n => renamed(n) && !merges[n]).forEach(openMergeRequest)}>Create all MRs</button>
+          {/if}
+          {#if Object.keys(statuses).some(n => finished(n) && !done(n) && !notStarted[n])}
+            <button class="btn-primary" onclick={confirmAll}>Confirm all finished</button>
+          {/if}
+        </div>
+      {/if}
     </section>
 
   {:else if view === 'detail'}
@@ -520,57 +562,6 @@
       {/if}
     </section>
 
-  {:else if view === 'confirm'}
-    <section class="panel">
-      <div class="panel-header">
-        <h2>Confirm Branch Names</h2>
-        {#if confirmDone}
-          <span class="badge badge-success">Complete</span>
-        {/if}
-      </div>
-
-      <ul class="status-list">
-        {#each Object.keys(statuses) as name}
-          <li class="status-item confirm-item">
-            <span class="status-indicator status-{statuses[name]}"></span>
-            <span class="name">{name}</span>
-            {#if confirmDone}
-              <span class="confirm-result">{confirmResults[name] || ''}</span>
-              {#if renamed(name)}
-                {#if merges[name]?.state === 'done'}
-                  <button class="btn-sm" onclick={() => BrowserOpenURL(merges[name].url)}>Open MR ↗</button>
-                {:else if merges[name]?.state === 'working'}
-                  <span class="merge-msg" title={merges[name].message}>{merges[name].message}</span>
-                  <button class="btn-sm btn-danger" onclick={() => CancelProject(name)}>Cancel</button>
-                {:else}
-                  {#if merges[name]?.state === 'failed'}<span class="merge-msg merge-failed" title={merges[name].message}>✗ {merges[name].message}</span>{/if}
-                  <button class="btn-sm" onclick={() => openMergeRequest(name)}>{merges[name] ? 'Retry MR' : 'Create MR'}</button>
-                {/if}
-              {/if}
-            {:else if statuses[name] === 'success'}
-              <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" bind:value={branchNames[name]} class="branch-name-input" />
-            {:else}
-              <span class="cleanup-note">cleanup will be performed</span>
-            {/if}
-            <button class="btn-sm" onclick={() => { prevView = 'confirm'; detailProject = name; view = 'detail'; }}>Logs</button>
-          </li>
-        {/each}
-      </ul>
-
-      <div class="footer-actions">
-        {#if confirmDone}
-          {#if Object.keys(statuses).some(n => renamed(n) && !merges[n])}
-            <button class="btn-sm" onclick={() => Object.keys(statuses).filter(n => renamed(n) && !merges[n]).forEach(openMergeRequest)}>Create all MRs</button>
-          {/if}
-          <button class="btn-primary" onclick={() => view = 'projects'}>Done</button>
-        {:else}
-          {#if Object.values(statuses).some(s => s === 'failed' || s === 'cancelled')}
-            <button class="btn-sm btn-danger" onclick={retryFailed}>Retry Failed</button>
-          {/if}
-          <button class="btn-primary" onclick={runConfirmation}>Confirm</button>
-        {/if}
-      </div>
-    </section>
   {/if}
 </main>
 
