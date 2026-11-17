@@ -29,6 +29,10 @@ export function InstallUpdate():Promise<void>;
 
 export function MergeRequest(arg1:string,arg2:string):Promise<void>;
 
+export function RefreshCore(arg1:string,arg2:boolean):Promise<string>;
+
+export function RefreshReleases():Promise<void>;
+
 export function RenameBranch(arg1:string,arg2:string):Promise<void>;
 
 export function RetryProjects(arg1:Array<string>):Promise<void>;

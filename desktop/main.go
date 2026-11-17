@@ -30,19 +30,21 @@ var assets embed.FS
 var version = "dev" // set by the build scripts: -ldflags "-X main.version=v1.2.3"
 
 type App struct {
-	ctx        context.Context
-	cfg        *config.Config
-	configPath string
-	mu         sync.Mutex
-	cancelAll  context.CancelFunc
-	parentCtx  context.Context
-	cancels    map[string]context.CancelFunc // running projects
-	pending    int                           // projects started and not yet finished
-	sem        chan struct{}
-	summaries  map[string]string     // last successful run's summary per project, used as merge request description
-	update     *updater.Release      // newer release found by the daily check
-	releases   []coreupdates.Release // Drupal core release history, cached
-	relFetched time.Time
+	ctx         context.Context
+	cfg         *config.Config
+	configPath  string
+	mu          sync.Mutex
+	cancelAll   context.CancelFunc
+	parentCtx   context.Context
+	cancels     map[string]context.CancelFunc // running projects
+	pending     int                           // projects started and not yet finished
+	sem         chan struct{}
+	summaries   map[string]string     // last successful run's summary per project, used as merge request description
+	update      *updater.Release      // newer release found by the daily check
+	releases    []coreupdates.Release // Drupal core release history, cached
+	relFetched  time.Time
+	paths       map[string]string    // project name -> path, from the last discovery
+	fetchFailed map[string]time.Time // origin fetches that failed this session (not retried automatically)
 }
 
 func NewApp() *App {
@@ -123,11 +125,62 @@ func (a *App) DiscoverProjects() ([]ProjectInfo, error) {
 		return nil, err
 	}
 	result := make([]ProjectInfo, len(projects))
+	paths := make(map[string]string, len(projects))
 	for i, p := range projects {
 		_, err := os.Stat(filepath.Join(p.Path, config.ProjectFile))
+		paths[p.Name] = p.Path
 		result[i] = ProjectInfo{Name: p.Name, Path: p.Path, RepoFile: err == nil, Core: discovery.CoreVersion(p.Path)}
 	}
+	a.mu.Lock()
+	a.paths = paths
+	a.mu.Unlock()
 	return result, nil
+}
+
+// RefreshReleases drops the cached Drupal release history so the next CoreStatuses call downloads it again.
+func (a *App) RefreshReleases() {
+	a.mu.Lock()
+	a.releases = nil
+	a.mu.Unlock()
+}
+
+// RefreshCore returns the Drupal core version committed on origin's start branch for a discovered project
+// (the working tree can be far behind), or "" when unknown. It fetches origin first when the last fetch is
+// over a day old, or always when force is set; a project that is being updated right now is not fetched.
+// A fetch that failed (offline, no key) is not retried automatically until the app restarts.
+func (a *App) RefreshCore(name string, force bool) string {
+	a.mu.Lock()
+	path := a.paths[name]
+	_, running := a.cancels[name]
+	_, failed := a.fetchFailed[path]
+	a.mu.Unlock()
+	if path == "" {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if !running && (force || (!failed && !executor.FetchedWithin(path, 24*time.Hour))) {
+		if err := executor.FetchOrigin(ctx, path); err != nil {
+			logging.Info("fetch %s: %v", name, err)
+			a.mu.Lock()
+			if a.fetchFailed == nil {
+				a.fetchFailed = map[string]time.Time{}
+			}
+			a.fetchFailed[path] = time.Now()
+			a.mu.Unlock()
+		} else {
+			a.mu.Lock()
+			delete(a.fetchFailed, path)
+			a.mu.Unlock()
+		}
+	}
+	pCfg := config.ForProject(a.cfg.Project(name), path)
+	if data, err := executor.RemoteStartFile(ctx, path, pCfg.GitStartBranch, "composer.lock"); err == nil {
+		if v := discovery.CoreVersionFromLock(data); v != "" {
+			return v
+		}
+	}
+	return discovery.CoreVersion(path)
 }
 
 // CoreStatuses compares installed core versions with Drupal's published releases. The release history

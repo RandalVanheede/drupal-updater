@@ -1,7 +1,7 @@
 <script>
   const isMac = navigator.userAgent.includes('Macintosh');
   import { onMount, tick } from 'svelte';
-  import { DiscoverProjects, CoreStatuses, GetConfig, SaveConfig, StartUpdate, CancelProject, CancelAll, RenameBranch, CleanupBranch, RetryProjects, GetClaudeDefaults, SetUpdateMode, FinalBranch, SaveProjectFile, MergeRequest, GetVersion, GetUpdate, InstallUpdate } from '../wailsjs/go/main/App';
+  import { DiscoverProjects, CoreStatuses, RefreshCore, RefreshReleases, GetConfig, SaveConfig, StartUpdate, CancelProject, CancelAll, RenameBranch, CleanupBranch, RetryProjects, GetClaudeDefaults, SetUpdateMode, FinalBranch, SaveProjectFile, MergeRequest, GetVersion, GetUpdate, InstallUpdate } from '../wailsjs/go/main/App';
   import { EventsOn, BrowserOpenURL } from '../wailsjs/runtime/runtime';
 
   const FONTS = {
@@ -191,8 +191,31 @@
     } catch (e) {
       projects = [];
     }
-    // dots are optional: offline or a failed lookup just leaves them out
-    CoreStatuses([...new Set(projects.map(p => p.core).filter(Boolean))]).then(r => coreStatus = r || {}).catch(() => {});
+    await updateStatuses();
+    refreshCores(false); // switches to the version committed on origin, fetching only when the last fetch is over a day old
+  }
+  // dots are optional: offline or a failed lookup just leaves them out
+  async function updateStatuses() {
+    try { coreStatus = (await CoreStatuses([...new Set(projects.map(p => p.core).filter(Boolean))])) || {}; } catch {}
+  }
+  let refreshing = $state(false);
+  let refreshDone = $state(0);
+  // Re-reads every project's core version from origin's start branch, 4 projects at a time.
+  // force = the Refresh button: fetch everything now and download Drupal's release list again.
+  async function refreshCores(force) {
+    if (refreshing || projects.length === 0) return;
+    refreshing = true; refreshDone = 0;
+    try {
+      if (force) await RefreshReleases();
+      const queue = [...projects];
+      const worker = async () => {
+        for (let p; (p = queue.shift()); refreshDone++) {
+          try { const v = await RefreshCore(p.name, force); if (v) p.core = v; } catch {}
+        }
+      };
+      await Promise.all([worker(), worker(), worker(), worker()]);
+      await updateStatuses();
+    } finally { refreshing = false; }
   }
 
   // acts on what the filters show, so hidden projects are never selected by accident
@@ -428,6 +451,7 @@
           {/each}
         </div>
         <div class="actions">
+          <button class="btn-sm" onclick={() => refreshCores(true)} disabled={refreshing} title="Fetch every project's origin and check Drupal's latest releases again">{refreshing ? `Refreshing ${refreshDone}/${projects.length}` : 'Refresh'}</button>
           <button class="btn-sm" onclick={toggleAll}>Toggle All</button>
         </div>
       </div>
@@ -1052,7 +1076,7 @@
     align-items: center;
     gap: 12px;
   }
-  .panel-header .actions { margin-left: auto; }
+  .panel-header .actions { margin-left: auto; display: flex; gap: 8px; }
 
   .project-list, .status-list {
     list-style: none;

@@ -146,6 +146,11 @@ func CoreVersion(dir string) string {
 	if err != nil {
 		return ""
 	}
+	return CoreVersionFromLock(data)
+}
+
+// CoreVersionFromLock is CoreVersion for composer.lock contents (for instance read from git).
+func CoreVersionFromLock(data []byte) string {
 	var lock struct {
 		Packages []struct {
 			Name    string `json:"name"`

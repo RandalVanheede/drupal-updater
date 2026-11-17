@@ -50,6 +50,14 @@ export function MergeRequest(arg1, arg2) {
   return window['go']['main']['App']['MergeRequest'](arg1, arg2);
 }
 
+export function RefreshCore(arg1, arg2) {
+  return window['go']['main']['App']['RefreshCore'](arg1, arg2);
+}
+
+export function RefreshReleases() {
+  return window['go']['main']['App']['RefreshReleases']();
+}
+
 export function RenameBranch(arg1, arg2) {
   return window['go']['main']['App']['RenameBranch'](arg1, arg2);
 }
