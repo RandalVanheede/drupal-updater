@@ -3,15 +3,20 @@ package main
 import (
 	"context"
 	"embed"
+	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"drupal-updater/api"
 	"drupal-updater/config"
 	"drupal-updater/coreupdates"
+	"drupal-updater/dashboard"
 	"drupal-updater/discovery"
 	"drupal-updater/executor"
 	"drupal-updater/logging"
@@ -30,28 +35,39 @@ var assets embed.FS
 var version = "dev" // set by the build scripts: -ldflags "-X main.version=v1.2.3"
 
 type App struct {
-	ctx         context.Context
-	cfg         *config.Config
-	configPath  string
-	mu          sync.Mutex
-	cancelAll   context.CancelFunc
-	parentCtx   context.Context
-	cancels     map[string]context.CancelFunc // running projects
-	pending     int                           // projects started and not yet finished
-	sem         chan struct{}
-	summaries   map[string]string     // last successful run's summary per project, used as merge request description
-	update      *updater.Release      // newer release found by the daily check
-	releases    []coreupdates.Release // Drupal core release history, cached
-	relFetched  time.Time
-	paths       map[string]string    // project name -> path, from the last discovery
-	fetchFailed map[string]time.Time // origin fetches that failed this session (not retried automatically)
+	ctx        context.Context
+	cfg        *config.Config
+	configPath string
+	mu         sync.Mutex
+	cancelAll  context.CancelFunc
+	parentCtx  context.Context
+	cancels    map[string]context.CancelFunc // running projects
+	pending    int                           // projects started and not yet finished
+	sem        chan struct{}
+	summaries  map[string]string   // last successful run's summary per project, used as merge request description
+	update     *updater.Release    // newer release found by the daily check
+	configErr  string              // set when config.yaml was unreadable at start
+	core       coreupdates.Tracker // release history + per-project core versions
+	dash       *dashboard.Client   // applications dashboard; nil until dashboard_url is configured
+	dashURL    string
+	dashProj   []dashboard.Project // cached for an hour
+	dashAt     time.Time
+	paths      map[string]string // project name -> path, from the last discovery
 }
 
 func NewApp() *App {
 	home, _ := os.UserHomeDir()
 	configPath := filepath.Join(home, ".config", "drupal-updater", "config.yaml")
 	cfg, err := config.LoadConfig(configPath)
+	configErr := ""
 	if err != nil {
+		// keep the unreadable file: running on defaults and saving must not overwrite it
+		if bad, berr := config.BackupBadConfig(configPath); berr == nil {
+			configErr = fmt.Sprintf("Your config could not be read (%v). It was kept as %s and defaults are in use.", err, bad)
+			logging.Error("%s", configErr)
+		} else {
+			configErr = fmt.Sprintf("Your config could not be read: %v", err)
+		}
 		cfg = &config.Config{
 			BaseFolders:   []string{"~/projects"},
 			MaxConcurrent: 3,
@@ -59,7 +75,7 @@ func NewApp() *App {
 		}
 	}
 	executor.Configure(cfg)
-	return &App{cfg: cfg, configPath: configPath}
+	return &App{cfg: cfg, configPath: configPath, configErr: configErr}
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -120,7 +136,8 @@ type ProjectInfo struct {
 }
 
 func (a *App) DiscoverProjects() ([]ProjectInfo, error) {
-	projects, err := discovery.DiscoverProjects(a.cfg.BaseFolders, a.cfg.ProjectPaths, a.cfg.ExcludedProjects, a.cfg.ScanDepth)
+	cfg := a.config()
+	projects, err := discovery.DiscoverProjects(cfg.BaseFolders, cfg.ProjectPaths, cfg.ExcludedProjects, cfg.ScanDepth)
 	if err != nil {
 		return nil, err
 	}
@@ -129,8 +146,19 @@ func (a *App) DiscoverProjects() ([]ProjectInfo, error) {
 	for i, p := range projects {
 		_, err := os.Stat(filepath.Join(p.Path, config.ProjectFile))
 		paths[p.Name] = p.Path
-		result[i] = ProjectInfo{Name: p.Name, Path: p.Path, RepoFile: err == nil, Core: discovery.CoreVersion(p.Path)}
+		result[i] = ProjectInfo{Name: p.Name, Path: p.Path, RepoFile: err == nil}
 	}
+	var wg sync.WaitGroup // composer.lock files can be several MB: read them side by side
+	gate := make(chan struct{}, 8)
+	for i := range result {
+		wg.Add(1)
+		gate <- struct{}{}
+		go func(i int) {
+			defer func() { <-gate; wg.Done() }()
+			result[i].Core = discovery.CoreVersion(result[i].Path)
+		}(i)
+	}
+	wg.Wait()
 	a.mu.Lock()
 	a.paths = paths
 	a.mu.Unlock()
@@ -138,83 +166,301 @@ func (a *App) DiscoverProjects() ([]ProjectInfo, error) {
 }
 
 // RefreshReleases drops the cached Drupal release history so the next CoreStatuses call downloads it again.
-func (a *App) RefreshReleases() {
-	a.mu.Lock()
-	a.releases = nil
-	a.mu.Unlock()
-}
+func (a *App) RefreshReleases() { a.core.ResetReleases() }
 
 // RefreshCore returns the Drupal core version committed on origin's start branch for a discovered project
-// (the working tree can be far behind), or "" when unknown. It fetches origin first when the last fetch is
-// over a day old, or always when force is set; a project that is being updated right now is not fetched.
-// A fetch that failed (offline, no key) is not retried automatically until the app restarts.
-func (a *App) RefreshCore(name string, force bool) string {
+// (see coreupdates.Tracker.Refresh); a project that is being updated right now is never fetched.
+func (a *App) RefreshCore(name string, force bool) coreupdates.Refresh {
 	a.mu.Lock()
 	path := a.paths[name]
 	_, running := a.cancels[name]
-	_, failed := a.fetchFailed[path]
 	a.mu.Unlock()
 	if path == "" {
-		return ""
+		return coreupdates.Refresh{}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if !running && (force || (!failed && !executor.FetchedWithin(path, 24*time.Hour))) {
-		if err := executor.FetchOrigin(ctx, path); err != nil {
-			logging.Info("fetch %s: %v", name, err)
-			a.mu.Lock()
-			if a.fetchFailed == nil {
-				a.fetchFailed = map[string]time.Time{}
-			}
-			a.fetchFailed[path] = time.Now()
-			a.mu.Unlock()
-		} else {
-			a.mu.Lock()
-			delete(a.fetchFailed, path)
-			a.mu.Unlock()
-		}
-	}
-	pCfg := config.ForProject(a.cfg.Project(name), path)
-	if data, err := executor.RemoteStartFile(ctx, path, pCfg.GitStartBranch, "composer.lock"); err == nil {
-		if v := discovery.CoreVersionFromLock(data); v != "" {
-			return v
-		}
-	}
-	return discovery.CoreVersion(path)
+	pCfg := config.ForProject(a.config().Project(name), path)
+	return a.core.Refresh(path, pCfg.GitStartBranch, force, running)
 }
 
-// CoreStatuses compares installed core versions with Drupal's published releases. The release history
-// is cached for an hour; when it cannot be fetched (offline) the map is empty and the UI shows no dots.
+// CoreStatuses compares installed core versions with Drupal's published releases (cached for an hour);
+// offline the map is empty and the UI shows no dots.
 func (a *App) CoreStatuses(versions []string) map[string]coreupdates.Result {
-	a.mu.Lock()
-	stale := a.releases == nil || time.Since(a.relFetched) > time.Hour
-	a.mu.Unlock()
-	if stale {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		rels, err := coreupdates.Fetch(ctx)
-		if err != nil {
-			logging.Info("core release history: %v", err)
-		} else {
-			a.mu.Lock()
-			a.releases, a.relFetched = rels, time.Now()
-			a.mu.Unlock()
+	return a.core.Statuses(versions)
+}
+
+// PickFolder opens the native folder dialog and returns the chosen folder ("" when cancelled), written
+// as ~/... when it is inside the home folder, like the config does.
+func (a *App) PickFolder() string {
+	dir, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{Title: "Choose a folder"})
+	if err != nil || dir == "" {
+		return ""
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		if rel, err := filepath.Rel(home, dir); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+			return "~/" + filepath.ToSlash(rel)
 		}
 	}
+	return dir
+}
+
+// PreviewProjects counts the projects these (possibly unsaved) settings would find, for the live hint in Settings.
+func (a *App) PreviewProjects(baseFolders, projectPaths, excluded []string, depth int) int {
+	projects, err := discovery.DiscoverProjects(baseFolders, projectPaths, excluded, depth)
+	if err != nil {
+		return 0
+	}
+	return len(projects)
+}
+
+// --- Applications dashboard (MCP server): read-only extra context per project ---
+
+// DashboardState is what Settings shows about the dashboard connection.
+type DashboardState struct {
+	Configured bool   `json:"configured"`
+	Error      string `json:"error,omitempty"` // why the address cannot be used
+	SignedIn   bool   `json:"signedIn"`
+	Server     string `json:"server"`
+}
+
+// DashInfo is a dashboard project matched to a local project.
+type DashInfo struct {
+	Name            string   `json:"name"`
+	URL             string   `json:"url"`
+	SLA             string   `json:"sla"`
+	Customer        string   `json:"customer"`
+	AccountManager  string   `json:"accountManager"`
+	CoreVersion     string   `json:"coreVersion"`
+	PHP             string   `json:"php"`
+	EOLRuntimes     []string `json:"eolRuntimes"`
+	SecurityUpdates []string `json:"securityUpdates"`
+	SecurityKnown   bool     `json:"securityKnown"` // the pending-security list was looked up (empty alone does not mean none)
+	MatchReason     string   `json:"matchReason"`   // how the local project was linked to this dashboard project
+	AutoMatched     bool     `json:"autoMatched"`   // found by detection rather than by name or configuration
+	Ref             string   `json:"ref"`           // what to store as dashboard_project to pin this match
+	Stale           bool     `json:"stale"`
+	LastScan        string   `json:"lastScan"`
+}
+
+// dashClient returns the client for the configured dashboard, or an error when there is none.
+func (a *App) dashClient() (*dashboard.Client, error) {
+	url := strings.TrimSpace(a.config().DashboardURL)
+	if url == "" {
+		url = config.DefaultDashboardURL
+	}
+	server, err := dashboard.ServerFrom(url)
+	if err != nil {
+		return nil, err
+	}
+	url = server
 	a.mu.Lock()
-	rels := a.releases
+	defer a.mu.Unlock()
+	if a.dash == nil || a.dashURL != url {
+		home, _ := os.UserHomeDir()
+		c, err := dashboard.New(url, dashboard.FileStore{Path: filepath.Join(home, ".config", "drupal-updater", "dashboard.json")}, nil)
+		if err != nil {
+			return nil, err
+		}
+		a.dash, a.dashURL, a.dashProj = c, url, nil
+	}
+	return a.dash, nil
+}
+
+func (a *App) DashboardState() DashboardState {
+	c, err := a.dashClient()
+	if err != nil {
+		return DashboardState{Server: strings.TrimSpace(a.config().DashboardURL), Error: err.Error()}
+	}
+	a.mu.Lock()
+	server := a.dashURL
 	a.mu.Unlock()
-	out := map[string]coreupdates.Result{}
-	for _, v := range versions {
-		if r, ok := coreupdates.Check(v, rels); ok {
-			out[v] = r
+	return DashboardState{Configured: true, SignedIn: c.SignedIn(), Server: server}
+}
+
+// DashboardSignIn opens the browser for the dashboard login and returns when it is done (or after 5 minutes).
+func (a *App) DashboardSignIn() error {
+	c, err := a.dashClient()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	return c.SignIn(ctx, func(u string) error { runtime.BrowserOpenURL(a.ctx, u); return nil })
+}
+
+func (a *App) DashboardSignOut() error {
+	c, err := a.dashClient()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	a.mu.Lock()
+	a.dashProj = nil
+	a.mu.Unlock()
+	return c.SignOut(ctx)
+}
+
+// dashProjects returns the dashboard's Drupal projects (cached for an hour; force = reload) and the local project
+// names. "signed-out" as the error means the UI should offer the sign-in.
+func (a *App) dashProjects(force bool) ([]dashboard.Project, []string, error) {
+	c, err := a.dashClient()
+	if err != nil {
+		return nil, nil, err
+	}
+	a.mu.Lock()
+	cached, at := a.dashProj, a.dashAt
+	local := make([]string, 0, len(a.paths))
+	for name := range a.paths {
+		local = append(local, name)
+	}
+	a.mu.Unlock()
+	sort.Strings(local)
+	if force || cached == nil || time.Since(at) > time.Hour {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		cached, err = c.DrupalProjects(ctx)
+		if errors.Is(err, dashboard.ErrSignedOut) {
+			return nil, nil, errors.New("signed-out")
+		}
+		if err != nil {
+			logging.Info("dashboard: %v", err)
+			return nil, nil, err
+		}
+		a.mu.Lock()
+		a.dashProj, a.dashAt = cached, time.Now()
+		a.mu.Unlock()
+	}
+	return cached, local, nil
+}
+
+// dashOverrides reads each local project's dashboard_project (its own local entry, or the repo's drupal-updater.yaml,
+// which wins) so that names which differ from the dashboard's can be matched.
+func (a *App) dashOverrides(local []string) map[string]string {
+	cfg := a.config()
+	a.mu.Lock()
+	paths := make(map[string]string, len(local))
+	for _, n := range local {
+		paths[n] = a.paths[n]
+	}
+	a.mu.Unlock()
+	out := map[string]string{}
+	for _, n := range local {
+		if v := config.ForProject(cfg.Project(n), paths[n]).DashboardProject; v != "" {
+			out[n] = v
 		}
 	}
 	return out
 }
 
-func (a *App) GetConfig() *config.Config {
+// safeDashURL returns raw only when it is an https address on the dashboard's own host: the URL is opened in the
+// user's browser, so one that came from the server must not be able to start another application (smb://, vscode://).
+func safeDashURL(raw, server string) string {
+	u, err := url.Parse(raw)
+	s, serr := url.Parse(server)
+	if err != nil || serr != nil || u.Scheme != "https" || u.Host == "" || u.Host != s.Host {
+		return ""
+	}
+	return u.String()
+}
+
+// dashMatcher prepares the matching: every local project with what its files reveal (git remote, DDEV name, site name).
+func (a *App) dashMatcher(projects []dashboard.Project, local []string) *dashboard.Matcher {
+	a.mu.Lock()
+	paths := make(map[string]string, len(local))
+	for _, n := range local {
+		paths[n] = a.paths[n]
+	}
+	a.mu.Unlock()
+	locals := make([]dashboard.Local, len(local))
+	for i, n := range local {
+		locals[i] = dashboard.Local{Name: n, Hints: dashboard.ReadHints(paths[n])}
+	}
+	return dashboard.NewMatcher(locals, projects)
+}
+
+// DashboardInfo returns the dashboard data for the discovered local projects, keyed by local name.
+func (a *App) DashboardInfo(force bool) (map[string]DashInfo, error) {
+	projects, local, err := a.dashProjects(force)
+	if err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	server := a.dashURL
+	a.mu.Unlock()
+	out := map[string]DashInfo{}
+	for name, mt := range a.dashMatcher(projects, local).Resolve(a.dashOverrides(local)) {
+		p := mt.Project
+		out[name] = DashInfo{MatchReason: mt.Reason, AutoMatched: mt.Auto, Ref: dashboard.Ref(p, projects), Name: p.Name, URL: safeDashURL(p.DashboardURL, server), SLA: p.SLA, Customer: p.Customer, AccountManager: p.AccountManager,
+			CoreVersion: p.CoreVersion, PHP: p.PHP, EOLRuntimes: p.EOLRuntimes, SecurityUpdates: p.SecurityUpdates, SecurityKnown: p.SecurityKnown, Stale: p.Stale, LastScan: p.LastScan}
+	}
+	return out, nil
+}
+
+// DashRef is a dashboard project as the picker offers it; Ref is what gets stored as dashboard_project.
+type DashRef struct {
+	Ref      string `json:"ref"`
+	Name     string `json:"name"`
+	Customer string `json:"customer"`
+}
+
+// UnmatchedProject is a local project without a dashboard match, with the closest dashboard names.
+type UnmatchedProject struct {
+	Local       string    `json:"local"`
+	Suggestions []DashRef `json:"suggestions"`
+}
+
+// DashCandidates is everything the picker needs: all dashboard projects, and the local ones still unmatched.
+type DashCandidates struct {
+	Projects  []DashRef          `json:"projects"`
+	Unmatched []UnmatchedProject `json:"unmatched"`
+}
+
+func (a *App) DashboardCandidates() (DashCandidates, error) {
+	projects, local, err := a.dashProjects(false)
+	if err != nil {
+		return DashCandidates{}, err
+	}
+	matcher := a.dashMatcher(projects, local)
+	matched := matcher.Resolve(a.dashOverrides(local))
+	taken := map[string]bool{}
+	for _, mt := range matched {
+		taken[mt.Project.ID] = true
+	}
+	ref := func(p dashboard.Project) DashRef {
+		return DashRef{Ref: dashboard.Ref(p, projects), Name: p.Name, Customer: p.Customer}
+	}
+	out := DashCandidates{Projects: []DashRef{}, Unmatched: []UnmatchedProject{}}
+	for _, p := range projects {
+		out.Projects = append(out.Projects, ref(p))
+	}
+	sort.Slice(out.Projects, func(i, j int) bool {
+		return strings.ToLower(out.Projects[i].Name) < strings.ToLower(out.Projects[j].Name)
+	})
+	for _, name := range local {
+		if _, ok := matched[name]; ok {
+			continue
+		}
+		u := UnmatchedProject{Local: name, Suggestions: []DashRef{}}
+		for _, p := range matcher.Suggest(name, taken, 3) {
+			u.Suggestions = append(u.Suggestions, ref(p))
+		}
+		out.Unmatched = append(out.Unmatched, u)
+	}
+	return out, nil
+}
+
+// config returns the current config; SaveConfig/SetUpdateMode replace the pointer, never edit it in place.
+func (a *App) config() *config.Config {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	return a.cfg
+}
+
+// GetConfigError is non-empty when config.yaml could not be read at start (the file is kept as config.yaml.bad).
+func (a *App) GetConfigError() string { return a.configErr }
+
+func (a *App) GetConfig() *config.Config {
+	return a.config()
 }
 
 // GetClaudeDefaults returns the built-in Claude prompt and allowed tools for the settings screen.
@@ -239,7 +485,9 @@ func (a *App) SaveConfig(cfg *config.Config) error {
 func (a *App) SetUpdateMode(mode string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.cfg.UpdateMode = mode
+	c := *a.cfg
+	c.UpdateMode = mode
+	a.cfg = &c
 	executor.Configure(a.cfg)
 	return config.SaveConfig(a.configPath, a.cfg)
 }
@@ -250,7 +498,14 @@ type UpdateRequest struct {
 
 // projectPath finds a discovered project's folder by name.
 func (a *App) projectPath(name string) (string, error) {
-	projects, err := discovery.DiscoverProjects(a.cfg.BaseFolders, a.cfg.ProjectPaths, a.cfg.ExcludedProjects, a.cfg.ScanDepth)
+	a.mu.Lock()
+	cached := a.paths[name]
+	a.mu.Unlock()
+	if fi, err := os.Stat(cached); cached != "" && err == nil && fi.IsDir() {
+		return cached, nil // known from the last discovery; no need to walk every base folder again
+	}
+	cfg := a.config()
+	projects, err := discovery.DiscoverProjects(cfg.BaseFolders, cfg.ProjectPaths, cfg.ExcludedProjects, cfg.ScanDepth)
 	if err != nil {
 		return "", err
 	}
@@ -288,7 +543,8 @@ func (a *App) StartUpdate(req UpdateRequest) {
 		ctx         context.Context
 	}
 
-	projects, err := discovery.DiscoverProjects(a.cfg.BaseFolders, a.cfg.ProjectPaths, a.cfg.ExcludedProjects, a.cfg.ScanDepth)
+	cfg := a.config()
+	projects, err := discovery.DiscoverProjects(cfg.BaseFolders, cfg.ProjectPaths, cfg.ExcludedProjects, cfg.ScanDepth)
 	var jobs []job
 	for _, projectName := range req.Projects {
 		a.mu.Lock()
@@ -315,7 +571,7 @@ func (a *App) StartUpdate(req UpdateRequest) {
 		}
 		projectPath := p.Path
 
-		pCfg := config.ForProject(a.cfg.Project(projectName), projectPath)
+		pCfg := config.ForProject(a.config().Project(projectName), projectPath)
 
 		tempBranch := executor.TempBranch(projectName)
 		startBranch := pCfg.GitStartBranch
@@ -396,6 +652,34 @@ func (a *App) CancelAll() {
 	if a.cancelAll != nil {
 		a.cancelAll()
 	}
+	for _, cancel := range a.cancels { // also merge requests, which are not children of parentCtx
+		cancel()
+	}
+}
+
+// beforeClose is the window's OnBeforeClose: it saves the window size and, while updates or merge requests
+// are running, asks first, because quitting abandons their Claude sessions.
+func (a *App) beforeClose(ctx context.Context) bool {
+	saveWindowSize(ctx)
+	a.mu.Lock()
+	busy := len(a.cancels) > 0 || a.pending > 0
+	a.mu.Unlock()
+	if !busy {
+		return false
+	}
+	choice, err := runtime.MessageDialog(ctx, runtime.MessageDialogOptions{
+		Type:          runtime.QuestionDialog,
+		Title:         "Updates are still running",
+		Message:       "Quitting now cancels the running updates and merge requests. Quit anyway?",
+		Buttons:       []string{"Quit", "Keep running"},
+		DefaultButton: "Keep running",
+		CancelButton:  "Keep running",
+	})
+	if err != nil || choice != "Quit" {
+		return true // prevent the close
+	}
+	a.CancelAll()
+	return false
 }
 
 func (a *App) CancelProject(name string) {
@@ -412,7 +696,7 @@ func (a *App) FinalBranch(projectName string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	pCfg := config.ForProject(a.cfg.Project(projectName), projectPath)
+	pCfg := config.ForProject(a.config().Project(projectName), projectPath)
 	return executor.FinalBranch(projectPath, pCfg.GitNewBranchPattern, projectName), nil
 }
 
@@ -440,7 +724,7 @@ func (a *App) CleanupBranch(projectName string) error {
 		return err
 	}
 
-	pCfg := config.ForProject(a.cfg.Project(projectName), projectPath)
+	pCfg := config.ForProject(a.config().Project(projectName), projectPath)
 
 	tempBranch := executor.TempBranch(projectName)
 	if err := executor.Cleanup(projectPath, pCfg.GitStartBranch, tempBranch); err != nil {
@@ -539,7 +823,9 @@ func main() {
 		Title:         "Drupal Updater",
 		Width:         w,
 		Height:        h,
-		OnBeforeClose: saveWindowSize,
+		MinWidth:      760,
+		MinHeight:     480,
+		OnBeforeClose: app.beforeClose,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

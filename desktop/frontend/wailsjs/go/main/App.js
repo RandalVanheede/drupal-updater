@@ -18,6 +18,26 @@ export function CoreStatuses(arg1) {
   return window['go']['main']['App']['CoreStatuses'](arg1);
 }
 
+export function DashboardCandidates() {
+  return window['go']['main']['App']['DashboardCandidates']();
+}
+
+export function DashboardInfo(arg1) {
+  return window['go']['main']['App']['DashboardInfo'](arg1);
+}
+
+export function DashboardSignIn() {
+  return window['go']['main']['App']['DashboardSignIn']();
+}
+
+export function DashboardSignOut() {
+  return window['go']['main']['App']['DashboardSignOut']();
+}
+
+export function DashboardState() {
+  return window['go']['main']['App']['DashboardState']();
+}
+
 export function DiscoverProjects() {
   return window['go']['main']['App']['DiscoverProjects']();
 }
@@ -34,6 +54,10 @@ export function GetConfig() {
   return window['go']['main']['App']['GetConfig']();
 }
 
+export function GetConfigError() {
+  return window['go']['main']['App']['GetConfigError']();
+}
+
 export function GetUpdate() {
   return window['go']['main']['App']['GetUpdate']();
 }
@@ -48,6 +72,14 @@ export function InstallUpdate() {
 
 export function MergeRequest(arg1, arg2) {
   return window['go']['main']['App']['MergeRequest'](arg1, arg2);
+}
+
+export function PickFolder() {
+  return window['go']['main']['App']['PickFolder']();
+}
+
+export function PreviewProjects(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['PreviewProjects'](arg1, arg2, arg3, arg4);
 }
 
 export function RefreshCore(arg1, arg2) {

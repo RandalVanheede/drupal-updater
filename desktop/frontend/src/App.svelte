@@ -1,96 +1,76 @@
 <script>
-  const isMac = navigator.userAgent.includes('Macintosh');
   import { onMount, tick } from 'svelte';
-  import { DiscoverProjects, CoreStatuses, RefreshCore, RefreshReleases, GetConfig, SaveConfig, StartUpdate, CancelProject, CancelAll, RenameBranch, CleanupBranch, RetryProjects, GetClaudeDefaults, SetUpdateMode, FinalBranch, SaveProjectFile, MergeRequest, GetVersion, GetUpdate, InstallUpdate } from '../wailsjs/go/main/App';
+  import { DashboardCandidates, DashboardState, DashboardSignIn, DashboardSignOut, DashboardInfo, PickFolder, PreviewProjects, GetConfigError, DiscoverProjects, CoreStatuses, RefreshCore, RefreshReleases, GetConfig, SaveConfig, StartUpdate, CancelProject, CancelAll, RenameBranch, CleanupBranch, RetryProjects, GetClaudeDefaults, SetUpdateMode, FinalBranch, SaveProjectFile, MergeRequest, GetVersion, GetUpdate, InstallUpdate } from '../wailsjs/go/main/App';
   import { EventsOn, BrowserOpenURL } from '../wailsjs/runtime/runtime';
+  import Seg from './Seg.svelte';
+  import Welcome from './Welcome.svelte';
+  import Tour from './Tour.svelte';
+  import ListEditor from './ListEditor.svelte';
+  import Slider from './Slider.svelte';
+  import DashPopover from './DashPopover.svelte';
+  import { FONTS, THEMES, SIZES, FONT_ITEMS, load } from './appearance.js';
+  import { segKeys } from './keys.js';
 
-  const FONTS = {
-    atkinson: { label: 'Atkinson Hyperlegible', scale: 1.125, css: "'Atkinson Hyperlegible Next Variable', 'Atkinson Hyperlegible Next'" },
-    jetbrains: { label: 'JetBrains Mono', scale: 1, css: "'JetBrains Mono Variable', 'JetBrains Mono'" },
-    spacegrotesk: { label: 'Space Grotesk', scale: 1.1, css: "'Space Grotesk Variable', 'Space Grotesk'" },
-  };
-  const load = (k, ok, d) => { try { const v = localStorage.getItem(k); return ok(v) ? v : d; } catch { return d; } };
+  const isMac = navigator.userAgent.includes('Macintosh');
+
   let theme = $state(load('theme', v => ['system', 'light', 'dark'].includes(v), 'system'));
   let fontSize = $state(load('fontSize', v => ['14', '16', '18', '20'].includes(v), '16'));
+  let font = $state(load('font', v => Object.hasOwn(FONTS, v), 'atkinson'));
   const dark = window.matchMedia('(prefers-color-scheme: dark)');
   let systemDark = $state(dark.matches);
   dark.addEventListener('change', e => systemDark = e.matches);
   $effect(() => {
-    document.documentElement.dataset.theme = theme === 'system' ? (systemDark ? 'dark' : 'light') : theme;
+    const root = document.documentElement;
+    root.dataset.theme = theme === 'system' ? (systemDark ? 'dark' : 'light') : theme;
     // per-font scale evens out the fonts' different x-heights
-    document.documentElement.style.fontSize = fontSize * FONTS[font].scale + 'px';
-    try { localStorage.setItem('theme', theme); localStorage.setItem('fontSize', fontSize); } catch {}
-  });
-  let font = $state((() => { try { return localStorage.getItem('font'); } catch { return null; } })());
-  if (!Object.hasOwn(FONTS, font)) font = 'atkinson';
-  $effect(() => {
+    root.style.fontSize = fontSize * FONTS[font].scale + 'px';
     const stack = FONTS[font].css + ', system-ui, sans-serif';
-    document.documentElement.style.setProperty('--font-head', stack);
-    document.documentElement.style.setProperty('--font-body', stack);
-    try { localStorage.setItem('font', font); } catch {}
+    root.style.setProperty('--font-head', stack);
+    root.style.setProperty('--font-body', stack);
+    try { localStorage.setItem('theme', theme); localStorage.setItem('fontSize', fontSize); localStorage.setItem('font', font); } catch {}
   });
 
-  // First-run tour: coach marks over real elements, replayable from the (?) button / Settings.
-  const STEPS = [
-    { view: 'projects', sel: '[data-tour=projects]', title: 'Your projects', text: 'Drupal projects found in your base folders show up here. Tick the ones you want to update, or use the filter and Toggle All above.' },
-    { view: 'projects', sel: '[data-tour=mode]', title: 'Update mode', text: 'Standard applies all minor and patch updates. Disaster only applies security fixes.' },
-    { view: 'projects', sel: '[data-tour=start]', title: 'Run the update', text: 'Claude updates each selected project on its own temporary branch, several at a time. When a project finishes you can review it, confirm, then merge it.' },
-    { view: 'config', tab: 'projects', sel: '[data-tour=folders]', title: 'Where projects come from', text: 'Add the folders to scan here. Nothing shows up on the Projects tab until you do.' },
-    { view: 'config', tab: 'claude', sel: '[data-tour=claude]', openAdvanced: true, title: 'Claude settings', text: 'Model, permission mode and timeout, plus the allowed tools and the prompt in the advanced part (opened here). Per-project overrides are further down.' },
-    { view: 'projects', sel: '[data-tour=help]', title: 'That is it', text: 'Click (?) any time to see this tour again.' },
-  ];
+  // "master|main" <-> ['master', 'main'] (git_start_branch is one "|"-separated string)
+  const branches = (v) => (v || '').split('|').map(b => b.trim()).filter(Boolean);
+  const loadHint = (v) => v <= 2 ? 'ok' : v <= 4 ? 'mid' : v <= 6 ? 'high' : 'max';
+  const loadText = (v) => v === 1 ? 'Gentle: one project at a time, the lowest CPU, memory and token use.'
+    : v <= 2 ? 'Light: easy on the machine and on your Claude rate limit.'
+    : v <= 4 ? 'Balanced: several Claude sessions at once, noticeable CPU and memory use.'
+    : v <= 6 ? 'Heavy: many parallel sessions burn tokens fast and load the machine.'
+    : 'Very heavy: likely to hit rate limits and slow the machine down.';
+  const depthText = (v) => v === 1 ? 'A project is a direct subfolder of a base folder.'
+    : v === 2 ? 'Also looks one folder deeper, e.g. <base>/<customer>/<project>.'
+    : 'Deeper levels take longer to scan.';
+  // live count of what the (unsaved) project settings would find
+  let previewCount = $state(null);
+  $effect(() => {
+    const args = [$state.snapshot(config.BaseFolders) || [], $state.snapshot(config.ProjectPaths) || [], $state.snapshot(config.ExcludedProjects) || [], Number(config.ScanDepth) || 1];
+    const timer = setTimeout(async () => { try { previewCount = await PreviewProjects(...args); } catch { previewCount = null; } }, 300);
+    return () => clearTimeout(timer);
+  });
   function setMode(m) { config.UpdateMode = m; SetUpdateMode(m); }
-  let tour = $state(-1);
-  let tourRect = $state(null);
-  async function showStep(i) {
-    if (i >= STEPS.length) return endTour();
-    tour = i;
-    view = STEPS[i].view;
-    if (STEPS[i].tab) settingsTab = STEPS[i].tab;
-    await tick();
-    const adv = document.querySelector('details.advanced');
-    if (adv) adv.open = !!STEPS[i].openAdvanced;
-    await tick();
-    const el = document.querySelector(STEPS[i].sel);
-    // a target taller than most of the window is aligned to the top so its start is visible
-    el?.scrollIntoView({ block: el.offsetHeight > innerHeight * 0.6 ? 'start' : 'nearest' });
-    const r = el?.getBoundingClientRect();
-    tourRect = r ? { top: r.top, left: r.left, width: r.width, height: r.height } : null;
-  }
-  function endTour() {
-    tour = -1; tourRect = null; view = 'projects';
-    try { localStorage.setItem('tourDone', '1'); } catch {}
-  }
-  // Whole-pixel positions only: translate(-50%) lands on half pixels and blurs the text.
-  function tourStyle(r) {
-    const w = 320, h = 200, mid = Math.round((innerWidth - w) / 2);
-    if (!r) return `left:${mid}px;bottom:24px`;
-    const left = Math.round(Math.max(16, Math.min(r.left, innerWidth - w - 16)));
-    if (innerHeight - (r.top + r.height) >= h) return `left:${left}px;top:${Math.round(r.top + r.height + 12)}px`;
-    if (r.top >= h) return `left:${left}px;bottom:${Math.round(innerHeight - r.top + 12)}px`;
-    return `left:${mid}px;bottom:24px`;
-  }
-  // First run: appearance picker first (changes apply live behind it), then the tour.
+
+  // First run: appearance picker first (changes apply live behind it), then the tour (replayable from the ? button).
+  let tour; // the <Tour> component
+  let tourActive = $state(false);
   let welcome = $state(false);
+  function goTo(v, tab) { view = v; if (tab) settingsTab = tab; }
   function finishWelcome() {
     welcome = false;
     try { localStorage.setItem('setupDone', '1'); } catch {}
     let toured = false;
     try { toured = !!localStorage.getItem('tourDone'); } catch {}
-    if (!toured) setTimeout(() => showStep(0), 300);
+    if (!toured) setTimeout(() => tour.start(), 300);
   }
   onMount(() => {
     let setup = false, toured = false;
     try { setup = !!localStorage.getItem('setupDone'); toured = !!localStorage.getItem('tourDone'); } catch {}
     if (!setup && !toured) welcome = true; // existing users (tour already seen) are not asked
-    else if (!toured) setTimeout(() => showStep(0), 600);
+    else if (!toured) setTimeout(() => tour.start(), 600);
   });
 
-  const TABS = [['projects', 'Projects'], ['branches', 'Branch defaults'], ['claude', 'Claude'], ['overrides', 'Project overrides'], ['appearance', 'Appearance']];
+  const TABS = [['projects', 'Projects'], ['branches', 'Branch defaults'], ['claude', 'Claude'], ['overrides', 'Project overrides'], ['dashboard', 'Dashboard'], ['appearance', 'Appearance']];
   let settingsTab = $state('projects');
-  const THEMES = [['system', 'System'], ['light', 'Light'], ['dark', 'Dark']];
-  const SIZES = [['14', 'Small'], ['16', 'Default'], ['18', 'Large'], ['20', 'Extra large']];
-  const FONT_ITEMS = Object.entries(FONTS).map(([k, f]) => [k, f.label, f.css]);
 
   let view = $state('projects');
   let projects = $state([]);
@@ -113,11 +93,16 @@
   let statusFilter = $state('all');
   // own keys only: project.core comes from composer.lock, so "constructor" must not hit Object.prototype
   const coreOf = (p) => (p.core && Object.hasOwn(coreStatus, p.core) ? coreStatus[p.core] : null);
-  const STATUS_FILTERS = [['all', 'All'], ['current', 'Up to date'], ['behind', 'Behind'], ['security', 'Security']];
+  const STATUS_FILTERS = [['all', 'All'], ['current', 'Up to date', undefined, 'current'], ['behind', 'Behind', undefined, 'behind'], ['security', 'Security', undefined, 'security']];
   // projects passing both the text and the update-status filter (unknown status only shows under All)
-  const visible = $derived(projects.filter(p =>
-    (!searchFilter || p.name.toLowerCase().includes(searchFilter.toLowerCase())) &&
-    (statusFilter === 'all' || coreOf(p)?.status === statusFilter)));
+  const visible = $derived.by(() => {
+    const q = searchFilter.toLowerCase();
+    return projects.filter(p => (!q || p.name.toLowerCase().includes(q)) &&
+      (statusFilter === 'all' || coreOf(p)?.status === statusFilter) &&
+      (slaFilter === 'all' || (slaFilter === '__none' ? !slaOf(p) : slaOf(p) === slaFilter)));
+  });
+  const selectedCount = $derived(projects.filter(p => selected[p.name]).length);
+  const hiddenSelected = $derived(selectedCount - visible.filter(p => selected[p.name]).length);
 
   let branchNames = $state({});
   let confirmResults = $state({});
@@ -125,6 +110,15 @@
   let merges = $state({}); // project -> {state: working|done|failed, message, url}
   let repoSaved = $state({}); // project -> result of writing drupal-updater.yaml
   let version = $state('');
+  let configError = $state('');
+  let loading = $state(true);
+  let saveError = $state('');
+  let justSaved = $state(false);
+  // the mode switch saves by itself, so it does not count as an unsaved edit
+  const configKey = (c) => JSON.stringify({ ...c, UpdateMode: undefined });
+  let snapshot = $state('');
+  const dirty = $derived(snapshot !== '' && configKey(config) !== snapshot);
+  let loadError = $state('');
   let update = $state(null); // newer release {version, url, canInstall}
   let updateMsg = $state('');
 
@@ -153,10 +147,18 @@
     EventsOn('merge-update', (u) => { merges[u.project] = u; });
     EventsOn('update-available', (r) => { update = r; });
     version = await GetVersion();
+    GetConfigError().then(m => configError = m || '').catch(() => {});
     update = (await GetUpdate()) || update;
 
-    const loaded = await GetConfig();
-    claudeDefaults = await GetClaudeDefaults();
+    let loaded;
+    try {
+      loaded = await GetConfig();
+      claudeDefaults = await GetClaudeDefaults();
+    } catch (e) {
+      loadError = 'Could not load settings: ' + (e?.message || e);
+      loading = false;
+      return;
+    }
     config = {
       ...loaded, // keep keys this screen doesn't edit
       UpdateMode: loaded.UpdateMode || 'standard',
@@ -172,7 +174,9 @@
       ExcludedProjects: loaded.ExcludedProjects || [],
       Projects: loaded.Projects || {},
       Defaults: loaded.Defaults || {},
+      DashboardURL: loaded.DashboardURL || DASH_DEFAULT,
     };
+    snapshot = configKey(config);
     await loadProjects();
   });
 
@@ -182,7 +186,85 @@
     behind: (r) => `Drupal core is behind (${r.latest} available), no security update`,
     security: (r) => `Security update needed (${r.latest} available)`,
   };
+  // Applications dashboard (optional): SLA, customer and pending security modules per project
+  const DASH_DEFAULT = 'https://applications.dyna-ops.be/api/mcp'; // the backend uses it too when the address is empty
+  let dash = $state({ configured: false, signedIn: false, server: '' });
+  let dashInfo = $state({});
+  let dashCand = $state({ projects: [], unmatched: [] });
+  const autoMatches = $derived(Object.entries(dashInfo).filter(([, d]) => d.autoMatched).sort(([x], [y]) => x.localeCompare(y)));
+  let dashPick = $state({}); // per local project: result of writing its dashboard_project
+  let dashBusy = $state(false);
+  let dashError = $state('');
+  async function refreshDashboard(force = false) {
+    try { dash = await DashboardState(); } catch { return; }
+    if (!dash.configured || !dash.signedIn) { dashInfo = {}; return; }
+    dashBusy = true;
+    try {
+      dashInfo = (await DashboardInfo(force)) || {};
+      dashCand = (await DashboardCandidates()) || { projects: [], unmatched: [] };
+      dashError = '';
+    }
+    catch (e) {
+      const msg = String(e?.message || e);
+      if (msg === 'signed-out') { dash = { ...dash, signedIn: false }; dashInfo = {}; }
+      else dashError = msg;
+    } finally { dashBusy = false; }
+  }
+  // Point a local project at a dashboard project: written to the project's drupal-updater.yaml (commit it to
+  // share it with the team); the repo file wins over local settings, so nothing else needs saving.
+  async function pickDashboard(local, ref) {
+    dashPick[local] = 'saving…';
+    try {
+      await SaveProjectFile(local, { DashboardProject: ref });
+      dashPick[local] = '✓ saved in drupal-updater.yaml, commit it to share';
+    } catch (e) {
+      dashPick[local] = '✗ ' + (e?.message || e);
+      return;
+    }
+    await refreshDashboard(false);
+  }
+  async function dashSignIn() {
+    dashBusy = true; dashError = '';
+    try { await DashboardSignIn(); } catch (e) { dashError = String(e?.message || e); }
+    dashBusy = false;
+    await refreshDashboard(true);
+  }
+  async function dashSignOut() {
+    try { await DashboardSignOut(); } catch (e) { dashError = String(e?.message || e); }
+    await refreshDashboard();
+  }
+  // Detail card for a project's dashboard data: opens at once on hover or focus, a click pins it
+  let pop = $state(null); // { local, rect, pinned }
+  let popTimer;
+  function openPop(e, local, pinned = false) {
+    clearTimeout(popTimer);
+    pop = { local, rect: e.currentTarget.getBoundingClientRect(), pinned: pinned || (pop?.pinned && pop.local === local) };
+  }
+  function togglePin(e, local) {
+    e.preventDefault(); e.stopPropagation(); // the pill sits inside the row's label: do not toggle the checkbox
+    if (pop?.pinned && pop.local === local) pop = null;
+    else openPop(e, local, true);
+  }
+  function schedulePopClose() {
+    if (pop?.pinned) return;
+    clearTimeout(popTimer);
+    popTimer = setTimeout(() => pop = null, 180); // long enough to move the pointer into the card
+  }
+  function closePop() { clearTimeout(popTimer); pop = null; }
+
+  // SLA filter: only offered once dashboard data is loaded
+  let slaFilter = $state('all');
+  const NO_SLA = '(no SLA)';
+  const slaOf = (p) => { const d = dashInfo[p.name]; return d ? (d.sla || NO_SLA) : null; };
+  const slaOptions = $derived.by(() => {
+    const counts = {};
+    for (const p of projects) { const k = slaOf(p); if (k) counts[k] = (counts[k] || 0) + 1; }
+    return Object.entries(counts).sort(([a], [b]) => a.localeCompare(b));
+  });
+  $effect(() => { if (slaFilter !== 'all' && Object.keys(dashInfo).length === 0) slaFilter = 'all'; });
+
   async function loadProjects() {
+    loading = true; loadError = '';
     try {
       projects = await DiscoverProjects();
       projects.forEach(p => {
@@ -190,7 +272,9 @@
       });
     } catch (e) {
       projects = [];
-    }
+      loadError = 'Could not scan for projects: ' + (e?.message || e);
+    } finally { loading = false; }
+    refreshDashboard();
     await updateStatuses();
     refreshCores(false); // switches to the version committed on origin, fetching only when the last fetch is over a day old
   }
@@ -200,21 +284,33 @@
   }
   let refreshing = $state(false);
   let refreshDone = $state(0);
+  let coreNote = $state('');
   // Re-reads every project's core version from origin's start branch, 4 projects at a time.
   // force = the Refresh button: fetch everything now and download Drupal's release list again.
   async function refreshCores(force) {
     if (refreshing || projects.length === 0) return;
-    refreshing = true; refreshDone = 0;
+    refreshing = true; refreshDone = 0; coreNote = '';
     try {
       if (force) await RefreshReleases();
       const queue = [...projects];
+      const found = {};
+      let failed = 0;
       const worker = async () => {
         for (let p; (p = queue.shift()); refreshDone++) {
-          try { const v = await RefreshCore(p.name, force); if (v) p.core = v; } catch {}
+          try {
+            const r = await RefreshCore(p.name, force);
+            if (r.version) found[p.name] = r.version;
+            if (r.fetchFailed) failed++;
+          } catch {}
         }
       };
       await Promise.all([worker(), worker(), worker(), worker()]);
+      projects.forEach(p => { if (found[p.name]) p.core = found[p.name]; }); // one pass, not one re-filter per project
       await updateStatuses();
+      const notes = [];
+      if (failed) notes.push(`${failed} ${failed === 1 ? 'project' : 'projects'} could not be fetched (offline?), versions may be old`);
+      if (projects.some(p => p.core) && Object.keys(coreStatus).length === 0) notes.push("Drupal's release list is unavailable, so there are no status dots");
+      coreNote = notes.join('. ');
     } finally { refreshing = false; }
   }
 
@@ -222,10 +318,6 @@
   function toggleAll() {
     const allSelected = visible.every(p => selected[p.name]);
     visible.forEach(p => selected[p.name] = !allSelected);
-  }
-
-  function startUpdate() {
-    doStart();
   }
 
   function doStart() {
@@ -241,20 +333,22 @@
     StartUpdate({ projects: selectedNames });
   }
 
-  function showDetail(name) {
-    prevView = view;
-    detailProject = name;
-    view = 'detail';
-  }
-
   async function saveConfig() {
     // Store defaults as empty so future built-in improvements still apply.
     const toSave = { ...config };
     if (toSave.ClaudePrompt === claudeDefaults.prompt) toSave.ClaudePrompt = '';
     if (JSON.stringify(toSave.ClaudeAllowedTools) === JSON.stringify(claudeDefaults.allowedTools)) toSave.ClaudeAllowedTools = [];
-    await SaveConfig(toSave);
-    await loadProjects();
-    view = 'projects';
+    saveError = '';
+    try {
+      await SaveConfig(toSave);
+    } catch (e) {
+      saveError = 'Could not save: ' + (e?.message || e);
+      return;
+    }
+    snapshot = configKey(config);
+    justSaved = true;
+    setTimeout(() => justSaved = false, 2500);
+    await loadProjects(); // folders or the dashboard address may have changed; stay on the settings page
   }
 
   function addProject() {
@@ -271,7 +365,6 @@
 
   function deleteProject(name) {
     delete config.Projects[name];
-    config.Projects = config.Projects;
     if (editingProject === name) editingProject = null;
   }
 
@@ -359,59 +452,16 @@
   }
 </script>
 
-<svelte:window
-  onresize={() => tour >= 0 && showStep(tour)}
-  onkeydown={(e) => { if (tour < 0) return; if (e.key === 'Escape') endTour(); else if (e.key === 'ArrowRight' || e.key === 'Enter') showStep(tour + 1); else if (e.key === 'ArrowLeft' && tour > 0) showStep(tour - 1); }} />
+{#if welcome}<Welcome bind:theme bind:font bind:fontSize ondone={finishWelcome} />{/if}
+<Tour bind:this={tour} go={goTo} bind:active={tourActive} />
 
-{#snippet seg(label, items, current, pick)}
-  <div class="field">
-    <span>{label}</span>
-    <div class="seg" role="radiogroup" aria-label={label}>
-      {#each items as [value, text, face]}
-        <button type="button" role="radio" aria-checked={current === value} class:on={current === value} style:font-family={face} onclick={() => pick(value)}>{text}</button>
-      {/each}
-    </div>
-  </div>
-{/snippet}
-
-{#if welcome}
-  <div class="tour-dim"></div>
-  <div class="welcome-wrap"><div class="tour-card welcome" role="dialog" aria-label="Welcome">
-    <h3>Welcome to Drupal Updater</h3>
-    <p>First, make it comfortable. Changes apply right away and you can change them later in Settings.</p>
-    <div class="welcome-fields">
-      {@render seg('Theme', THEMES, theme, v => theme = v)}
-      {@render seg('Font', FONT_ITEMS, font, v => font = v)}
-      {@render seg('Font size', SIZES, fontSize, v => fontSize = v)}
-    </div>
-    <div class="tour-actions">
-      <span class="spacer"></span>
-      <button class="btn-primary" onclick={finishWelcome}>Continue</button>
-    </div>
-  </div></div>
+<svelte:window onpointerdown={(e) => { if (pop?.pinned && !e.target.closest?.('.pop, .sla')) closePop(); }} />
+{#if pop && dashInfo[pop.local]}
+  <DashPopover info={dashInfo[pop.local]} ours={projects.find(p => p.name === pop.local)?.core} rect={pop.rect} pinned={pop.pinned}
+    onenter={() => clearTimeout(popTimer)} onleave={schedulePopClose} onclose={closePop} onsave={() => pickDashboard(pop.local, dashInfo[pop.local].ref)} />
 {/if}
 
-{#if tour >= 0}
-  <div class="tour-block"></div>
-  {#if tourRect}
-    <div class="tour-spot" style="top:{tourRect.top - 6}px;left:{tourRect.left - 6}px;width:{tourRect.width + 12}px;height:{tourRect.height + 12}px"></div>
-  {:else}
-    <div class="tour-dim"></div>
-  {/if}
-  <div class="tour-card" role="dialog" aria-label="Tutorial" style={tourStyle(tourRect)}>
-    <div class="tour-count">{tour + 1} / {STEPS.length}</div>
-    <h3>{STEPS[tour].title}</h3>
-    <p>{STEPS[tour].text}</p>
-    <div class="tour-actions">
-      <button class="btn-sm" onclick={endTour}>Skip</button>
-      <span class="spacer"></span>
-      {#if tour > 0}<button class="btn-sm" onclick={() => showStep(tour - 1)}>Back</button>{/if}
-      <button class="btn-primary" onclick={() => showStep(tour + 1)}>{tour === STEPS.length - 1 ? 'Done' : 'Next'}</button>
-    </div>
-  </div>
-{/if}
-
-<main class:mac={isMac}>
+<main class:mac={isMac} inert={welcome || tourActive}>
   {#if isMac}<div class="titlebar"></div>{/if}
   <header>
     <h1><svg class="spark" viewBox="0 0 45 36" aria-hidden="true"><path fill="currentColor" d="M44.3405 17.295L44.3252 17.2935C30.4154 17.3718 24.506 9.22934 23.2001 1.35592C23.0692 0.566652 21.923 0.572046 21.7632 1.35592L21.7548 1.40223C20.4219 9.2372 14.5201 17.3076 0.704589 17.2534L0.659481 17.2546C-0.21725 17.3507 -0.2224 18.7116 0.659481 18.7066C14.5693 18.6283 20.4787 26.7708 21.7846 34.6442C21.9155 35.4334 23.0617 35.428 23.2215 34.6442L23.2299 34.5979C24.5647 26.7515 30.4818 18.669 44.3405 18.747C45.2224 18.7519 45.2172 17.391 44.3405 17.295Z"/></svg>Drupal Updater</h1>
@@ -429,7 +479,7 @@
     <nav>
       <button class:active={view === 'projects'} onclick={() => view = 'projects'}>Projects</button>
       <button class:active={view === 'config'} onclick={() => view = 'config'}>Settings</button>
-      <button data-tour="help" class="help" title="Show the tutorial" aria-label="Show the tutorial" disabled={busy} onclick={() => showStep(0)}>?</button>
+      <button data-tour="help" class="help" title="Show the tutorial" aria-label="Show the tutorial" disabled={busy} onclick={() => tour.start()}>?</button>
       {#if isRunning}
         <button class:active={view === 'running'} onclick={() => view = 'running'}>
           {busy ? '● Running' : '⚑ Review'}
@@ -438,35 +488,47 @@
     </nav>
   </header>
 
+  {#if configError}<p class="notice" role="alert">{configError}</p>{/if}
+
   {#if view === 'projects'}
     <section class="panel">
       <div class="panel-header">
-        <h2>Select projects to update</h2>
+        <h2 class="sr">Select projects to update</h2>
         <div class="search-box">
           <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" bind:value={searchFilter} placeholder="Filter projects..." class="search-input" />
         </div>
-        <div class="seg seg-sm" role="radiogroup" aria-label="Filter by update status">
-          {#each STATUS_FILTERS as [key, label]}
-            <button type="button" role="radio" aria-checked={statusFilter === key} class:on={statusFilter === key} onclick={() => statusFilter = key}>{#if key !== 'all'}<i class="dot dot-{key}"></i>{/if}{label}</button>
-          {/each}
-        </div>
+        {#if coreNote}<span class="hint core-note" title={coreNote}>⚠ {coreNote}</span>{/if}
+        <Seg small labelled={false} label="Filter by update status" items={STATUS_FILTERS} value={statusFilter} onpick={v => statusFilter = v} />
+        {#if slaOptions.length}
+          <select class="sla-filter" bind:value={slaFilter} aria-label="Filter by SLA">
+            <option value="all">All SLAs</option>
+            {#each slaOptions as [k, n] (k)}<option value={k}>{k} ({n})</option>{/each}
+            {#if projects.some(p => !slaOf(p))}<option value="__none">Not in the dashboard ({projects.filter(p => !slaOf(p)).length})</option>{/if}
+          </select>
+        {/if}
         <div class="actions">
           <button class="btn-sm" onclick={() => refreshCores(true)} disabled={refreshing} title="Fetch every project's origin and check Drupal's latest releases again">{refreshing ? `Refreshing ${refreshDone}/${projects.length}` : 'Refresh'}</button>
           <button class="btn-sm" onclick={toggleAll}>Toggle All</button>
         </div>
       </div>
 
-      <ul class="project-list" data-tour="projects">
-        {#each visible as project}
+      <ul class="project-list" data-tour="projects" onscroll={closePop}>
+        {#each visible as project (project.name)}
           <li class:selected={selected[project.name]}>
             <label>
               <input type="checkbox" bind:checked={selected[project.name]} />
               <span class="namecell">
                 <span class="name">{project.name}</span>
                 {#if project.repoFile}<span class="badge badge-repo" title="Settings from the repo's drupal-updater.yaml">repo config</span>{/if}
+                {#if dashInfo[project.name]}{@const d = dashInfo[project.name]}
+                  <button type="button" class="sla" class:stale={d.stale} aria-haspopup="dialog" aria-expanded={pop?.local === project.name}
+                    onmouseenter={(e) => openPop(e, project.name)} onmouseleave={schedulePopClose} onfocus={(e) => openPop(e, project.name)} onblur={schedulePopClose}
+                    onclick={(e) => togglePin(e, project.name)}>{d.sla || 'no SLA'}</button>
+                  {#if d.url}<button type="button" class="dash-link" title="Open {d.name} in the dashboard" aria-label="Open {d.name} in the dashboard" onclick={(e) => { e.preventDefault(); e.stopPropagation(); BrowserOpenURL(d.url); }}>↗</button>{/if}
+                {/if}
               </span>
               <span class="corecell">
-                {#if project.core}{@const st = coreOf(project)}<span class="core" title={(st && CORE_TITLE[st.status]?.(st)) || 'Installed Drupal core (composer.lock)'}>{#if st}<i class="dot dot-{st.status}"></i>{/if}{project.core}</span>{/if}
+                {#if project.core}{@const st = coreOf(project)}<span class="core" title={(st && CORE_TITLE[st.status]?.(st)) || 'Installed Drupal core (composer.lock)'}>{#if st}<i class="dot dot-{st.status}" aria-hidden="true"></i><span class="sr">{CORE_TITLE[st.status]?.(st)}: </span>{/if}{project.core}</span>{/if}
               </span>
               <!-- rtl + ellipsis cuts the front of the path; <bdi> keeps the text itself left-to-right -->
               <span class="path" title={project.path}><bdi>{project.path}</bdi></span>
@@ -479,20 +541,25 @@
         <p class="empty">No projects match the filters.</p>
       {/if}
 
-      {#if projects.length === 0}
+      {#if loading}
+        <p class="empty">Looking for projects…</p>
+      {:else if loadError}
+        <p class="notice" role="alert">{loadError}</p>
+      {:else if projects.length === 0}
         <p class="empty">No projects found. Check your project folders in Settings.</p>
       {/if}
 
       <div class="footer-actions">
         <div class="update-mode" data-tour="mode">
           <span>Mode</span>
-          <button type="button" class="mode-label" class:on={config.UpdateMode !== 'disaster'} onclick={() => setMode('standard')}>Standard</button>
+          <button type="button" tabindex="-1" class="mode-label" class:on={config.UpdateMode !== 'disaster'} onclick={() => setMode('standard')}>Standard</button>
           <button type="button" role="switch" class="mode-switch" aria-label="Disaster mode (security fixes only)" aria-checked={config.UpdateMode === 'disaster'} onclick={() => setMode(config.UpdateMode === 'disaster' ? 'standard' : 'disaster')}><span class="knob"></span></button>
-          <button type="button" class="mode-label" class:on={config.UpdateMode === 'disaster'} onclick={() => setMode('disaster')}>Disaster</button>
+          <button type="button" tabindex="-1" class="mode-label" class:on={config.UpdateMode === 'disaster'} onclick={() => setMode('disaster')}>Disaster</button>
           <span class="mode-hint">{config.UpdateMode === 'disaster' ? 'security fixes only' : 'all minor and patch updates'}</span>
         </div>
-        <button class="btn-primary" data-tour="start" onclick={startUpdate} disabled={!projects.some(p => selected[p.name])}>
-          Update Selected
+        {#if hiddenSelected > 0}<span class="hint">{hiddenSelected} selected {hiddenSelected === 1 ? 'is' : 'are'} hidden by the filters</span>{/if}
+        <button class="btn-primary" data-tour="start" onclick={doStart} disabled={!projects.some(p => selected[p.name])}>
+          Update {selectedCount || ''} selected
         </button>
       </div>
     </section>
@@ -500,70 +567,131 @@
   {:else if view === 'config'}
     <section class="panel config-panel">
       <div class="settings-layout">
-        <nav class="settings-tabs" role="tablist" aria-orientation="vertical">
+        <nav class="settings-tabs" role="tablist" aria-orientation="vertical" onkeydown={segKeys}>
           {#each TABS as [key, label]}
-            <button type="button" role="tab" aria-selected={settingsTab === key} class:on={settingsTab === key} onclick={() => settingsTab = key}>{label}</button>
+            <button type="button" role="tab" id="tab-{key}" aria-controls="panel-{key}" tabindex={settingsTab === key ? 0 : -1} aria-selected={settingsTab === key} class:on={settingsTab === key} onclick={() => settingsTab = key}>{label}</button>
           {/each}
         </nav>
         <div class="settings-content">
-      <div class="settings-section" hidden={settingsTab !== 'appearance'}>
+      <div class="settings-section" role="tabpanel" id="panel-dashboard" aria-labelledby="tab-dashboard" hidden={settingsTab !== 'dashboard'}>
+        <div class="section-head">
+          <h3>Dashboard</h3>
+          <p class="hint">Optional. Shows each project's SLA and a link to its page in the applications dashboard. Read-only: nothing is written back.</p>
+        </div>
+        <div class="section-body">
+          <label class="field">
+            Dashboard address <span class="hint">the server root or the full MCP address</span>
+            <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="https://applications.example.com" bind:value={config.DashboardURL} />
+          </label>
+          {#if dirty}<p class="hint">Save the settings first: Connect uses the saved address.</p>{/if}
+          <div class="dash-state">
+            {#if !dash.configured}
+              <span class="hint err">{dash.error || 'Not configured.'}</span>
+            {:else if dash.signedIn}
+              <span class="dash-ok">● Connected to {dash.server}</span>
+              <button class="btn-sm" onclick={() => refreshDashboard(true)} disabled={dashBusy}>{dashBusy ? 'Loading…' : 'Reload'}</button>
+              <button class="btn-sm" onclick={dashSignOut} disabled={dashBusy}>Disconnect</button>
+            {:else}
+              <span class="hint">Not connected.</span>
+              <button class="btn-sm" onclick={dashSignIn} disabled={dashBusy}>{dashBusy ? 'Waiting for the browser…' : 'Connect…'}</button>
+            {/if}
+          </div>
+          {#if dashError}<p class="notice" role="alert">{dashError}</p>{/if}
+          {#if dash.signedIn}<p class="hint">{Object.keys(dashInfo).length} of {projects.length} projects matched a dashboard project ({autoMatches.length} of them detected automatically). Data from the dashboard comes from scans and connectors on each site and can be days old; the Drupal version and status dots in the list are always read from the repository.</p>{/if}
+          {#if dash.signedIn && autoMatches.length}
+            <div class="field">
+              <span>Detected automatically ({autoMatches.length}) <span class="hint">matched from the git group, DDEV and site names; save the ones that are right to make them permanent</span></span>
+              <ul class="unmatched">
+                {#each autoMatches as [local, d] (local)}
+                  <li>
+                    <span class="local" title={local}>{local} → {d.name}</span>
+                    <button type="button" class="btn-sm" onclick={() => pickDashboard(local, d.ref)}>Save match</button>
+                    <span class="hint why-line">because {d.matchReason}</span>
+                    {#if dashPick[local]}<span class="hint pick">{dashPick[local]}</span>{/if}
+                  </li>
+                {/each}
+              </ul>
+            </div>
+          {/if}
+          {#if dash.signedIn && dashCand.unmatched.length}
+            <div class="field">
+              <span>Unmatched projects ({dashCand.unmatched.length}) <span class="hint">pick the dashboard project each one is; it is written to that project's drupal-updater.yaml, which you commit to share it</span></span>
+              <ul class="unmatched">
+                {#each dashCand.unmatched as u (u.local)}
+                  <li>
+                    <span class="local" title={u.local}>{u.local}</span>
+                    <select aria-label="Dashboard project for {u.local}" onchange={(e) => { const v = e.currentTarget.value; e.currentTarget.value = ''; if (v) pickDashboard(u.local, v); }}>
+                      <option value="">{u.suggestions.length ? 'Other…' : 'Choose…'}</option>
+                      {#each dashCand.projects as p (p.ref)}<option value={p.ref}>{p.name}{p.customer ? ' · ' + p.customer : ''}</option>{/each}
+                    </select>
+                    <span class="sugg">
+                      {#each u.suggestions as sug (sug.ref)}
+                        <button type="button" class="btn-sm" title={sug.customer || ''} onclick={() => pickDashboard(u.local, sug.ref)}>{sug.name}</button>
+                      {/each}
+                    </span>
+                    {#if dashPick[u.local]}<span class="hint pick">{dashPick[u.local]}</span>{/if}
+                  </li>
+                {/each}
+              </ul>
+            </div>
+          {/if}
+        </div>
+      </div>
+
+      <div class="settings-section" role="tabpanel" id="panel-appearance" aria-labelledby="tab-appearance" hidden={settingsTab !== 'appearance'}>
         <div class="section-head">
           <h3>Appearance</h3>
           <p class="hint">Applies immediately, stored on this machine.</p>
         </div>
         <div class="section-body">
-          {@render seg('Theme', THEMES, theme, v => theme = v)}
-          {@render seg('Font', FONT_ITEMS, font, v => font = v)}
-          {@render seg('Font size', SIZES, fontSize, v => fontSize = v)}
+          <Seg label="Theme" items={THEMES} value={theme} onpick={v => theme = v} />
+          <Seg label="Font" items={FONT_ITEMS} value={font} onpick={v => font = v} />
+          <Seg label="Font size" items={SIZES} value={fontSize} onpick={v => fontSize = v} />
           <div class="field">
             <span>Tutorial</span>
-            <button class="btn-sm replay" onclick={() => showStep(0)}>Show tutorial again</button>
+            <button class="btn-sm replay" onclick={() => tour.start()}>Show tutorial again</button>
           </div>
         </div>
       </div>
 
-      <div class="settings-section" hidden={settingsTab !== 'projects'} data-tour="folders">
+      <div class="settings-section" role="tabpanel" id="panel-projects" aria-labelledby="tab-projects" hidden={settingsTab !== 'projects'} data-tour="folders">
         <div class="section-head">
           <h3>Projects</h3>
           <p class="hint">Where Drupal projects are found.</p>
         </div>
-        <div class="section-body two-col">
-          <label class="field">
-            Base folders <span class="hint">one per line, scanned one level deep</span>
-            <textarea autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" rows="3" value={config.BaseFolders?.join('\n') || ''}
-              onchange={(e) => config.BaseFolders = e.target.value.split('\n').map(s => s.trim()).filter(Boolean)}></textarea>
-          </label>
-          <label class="field">
-            Extra project paths <span class="hint">one per line, single projects</span>
-            <textarea autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" rows="3" value={config.ProjectPaths?.join('\n') || ''}
-              onchange={(e) => config.ProjectPaths = e.target.value.split('\n').map(s => s.trim()).filter(Boolean)}></textarea>
-          </label>
-          <label class="field span-2">
-            Excluded projects <span class="hint">comma-separated, * wildcards</span>
-            <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" value={config.ExcludedProjects?.join(', ') || ''}
-              onchange={(e) => config.ExcludedProjects = e.target.value.split(',').map(s => s.trim()).filter(Boolean)} />
-          </label>
-          <label class="field narrow">
-            Scan depth <span class="hint">levels below a base folder</span>
-            <input type="number" bind:value={config.ScanDepth} min="1" max="10" />
-          </label>
-          <label class="field narrow">
-            Max concurrent runs
-            <input type="number" bind:value={config.MaxConcurrent} min="1" max="20" />
-          </label>
+        <div class="section-body">
+          <div class="section-body two-col">
+            <Slider label="Scan depth" value={config.ScanDepth} onchange={v => config.ScanDepth = v} min={1} max={Math.max(4, config.ScanDepth || 1)} format={v => v === 1 ? '1 level' : v + ' levels'} describe={depthText} />
+            <Slider label="Max concurrent runs" value={config.MaxConcurrent} onchange={v => config.MaxConcurrent = v} min={1} max={Math.max(10, config.MaxConcurrent || 1)} gradient tone={loadHint} describe={loadText} />
+          </div>
+          <div class="field">
+            <span>Base folders <span class="hint">each is searched for Drupal projects (see scan depth)</span></span>
+            <ListEditor label="Base folders" items={config.BaseFolders} onchange={v => config.BaseFolders = v} placeholder="~/projects" onbrowse={PickFolder} emptyText="No base folders yet" />
+          </div>
+          <div class="field">
+            <span>Extra project paths <span class="hint">single projects outside the base folders</span></span>
+            <ListEditor label="Extra project paths" items={config.ProjectPaths} onchange={v => config.ProjectPaths = v} placeholder="~/work/one-off-site" onbrowse={PickFolder} emptyText="None" />
+          </div>
+          <div class="field">
+            <span>Excluded projects <span class="hint">folder names, <code>*</code> is a wildcard</span></span>
+            <ListEditor label="Excluded projects" items={config.ExcludedProjects} onchange={v => config.ExcludedProjects = v} placeholder="sandbox*" emptyText="Nothing excluded" />
+          </div>
+          {#if previewCount !== null}
+            <p class="hint preview" aria-live="polite">{previewCount === 0 ? 'No projects found with these settings.' : `These settings find ${previewCount} ${previewCount === 1 ? 'project' : 'projects'}.`}</p>
+          {/if}
         </div>
       </div>
 
-      <div class="settings-section" hidden={settingsTab !== 'branches'}>
+      <div class="settings-section" role="tabpanel" id="panel-branches" aria-labelledby="tab-branches" hidden={settingsTab !== 'branches'}>
         <div class="section-head">
           <h3>Branch defaults</h3>
           <p class="hint">For every project. Project overrides and a repo's <code>drupal-updater.yaml</code> win.</p>
         </div>
         <div class="section-body two-col">
-          <label class="field">
-            Start branch
-            <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="master|main" bind:value={config.Defaults.GitStartBranch} />
-          </label>
+          <div class="field span-2">
+            <span>Start branch <span class="hint">the first one that exists in a repo is used; the others are fallbacks</span></span>
+            <ListEditor ordered label="Start branch" items={branches(config.Defaults.GitStartBranch)} onchange={v => config.Defaults.GitStartBranch = v.join('|')} placeholder="master" emptyText="Empty: master, then main" />
+          </div>
           <label class="field">
             Final branch pattern <span class="hint">{'{date}'}, * = project</span>
             <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="hotfix/{'{date}'}-drupal-updates" bind:value={config.Defaults.GitNewBranchPattern} />
@@ -579,7 +707,7 @@
         </div>
       </div>
 
-      <div class="settings-section" hidden={settingsTab !== 'claude'} data-tour="claude">
+      <div class="settings-section" role="tabpanel" id="panel-claude" aria-labelledby="tab-claude" hidden={settingsTab !== 'claude'} data-tour="claude">
         <div class="section-head">
           <h3>Claude</h3>
           <p class="hint">The session that runs each update.</p>
@@ -598,10 +726,7 @@
               <option value="manual">manual</option>
             </select>
           </label>
-          <label class="field">
-            Timeout (minutes)
-            <input type="number" bind:value={config.ClaudeTimeoutMinutes} min="1" />
-          </label>
+          <Slider label="Timeout" value={config.ClaudeTimeoutMinutes} onchange={v => config.ClaudeTimeoutMinutes = v} min={5} max={Math.max(240, config.ClaudeTimeoutMinutes || 60)} step={5} format={v => v + ' min'} describe={() => 'A run that takes longer is stopped; work already committed is kept on a failed- branch.'} />
           <details class="advanced span-3">
             <summary>Advanced: allowed tools and prompt</summary>
             <label class="field">
@@ -619,7 +744,7 @@
         </div>
       </div>
 
-      <div class="settings-section" hidden={settingsTab !== 'overrides'}>
+      <div class="settings-section" role="tabpanel" id="panel-overrides" aria-labelledby="tab-overrides" hidden={settingsTab !== 'overrides'}>
         <div class="section-head">
           <h3>Project overrides</h3>
           <p class="hint">Local to this machine. A committed <code>drupal-updater.yaml</code> wins per field; "Save to repo" writes one for the team.</p>
@@ -643,10 +768,10 @@
 
                 {#if editingProject === name}
                   <div class="project-config-edit">
-                    <label>
-                      Start branch
-                      <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder={config.Defaults.GitStartBranch || 'master'} bind:value={config.Projects[name].GitStartBranch} />
-                    </label>
+                    <div class="edit-field">
+                      <span>Start branch <span class="hint">empty = the defaults ({config.Defaults.GitStartBranch || 'master|main'})</span></span>
+                      <ListEditor ordered label="Start branch for {name}" items={branches(config.Projects[name].GitStartBranch)} onchange={v => config.Projects[name].GitStartBranch = v.join('|')} placeholder={config.Defaults.GitStartBranch || 'master'} emptyText="Uses the defaults" />
+                    </div>
                     <label>
                       Branch pattern
                       <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder={config.Defaults.GitNewBranchPattern || 'hotfix/{date}-drupal-updates'} bind:value={config.Projects[name].GitNewBranchPattern} />
@@ -659,15 +784,21 @@
                       Commit message for the merge request
                       <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder={config.Defaults.GitCommitMessage || 'Drupal updates {date}'} bind:value={config.Projects[name].GitCommitMessage} />
                     </label>
+                    <div class="edit-field">
+                      <span>Ignored packages</span>
+                      <ListEditor label="Ignored packages for {name}" items={config.Projects[name].IgnoredPackages} onchange={v => config.Projects[name].IgnoredPackages = v} placeholder="drupal/some_module" emptyText="None" />
+                    </div>
+                    <div class="edit-field">
+                      <span>Extra smoke-test paths <span class="hint">prefix <code>admin:</code> for logged-in pages</span></span>
+                      <ListEditor label="Smoke-test paths for {name}" items={config.Projects[name].SmokePaths} onchange={v => config.Projects[name].SmokePaths = v} placeholder="/contact" emptyText="None" />
+                    </div>
                     <label>
-                      Ignored packages (comma-separated)
-                      <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" value={config.Projects[name].IgnoredPackages?.join(', ') || ''}
-                        onchange={(e) => config.Projects[name].IgnoredPackages = e.target.value.split(',').map(s => s.trim()).filter(Boolean)} />
-                    </label>
-                    <label>
-                      Extra smoke-test paths (comma-separated; prefix admin: for logged-in)
-                      <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" value={config.Projects[name].SmokePaths?.join(', ') || ''}
-                        onchange={(e) => config.Projects[name].SmokePaths = e.target.value.split(',').map(s => s.trim()).filter(Boolean)} />
+                      Dashboard project <span class="hint">only when its name differs from the folder name</span>
+                      <select bind:value={config.Projects[name].DashboardProject}>
+                        <option value="">Match by name{dashInfo[name] ? ` (now: ${dashInfo[name].name})` : ''}</option>
+                        {#if config.Projects[name].DashboardProject && !dashCand.projects.some(p => p.ref === config.Projects[name].DashboardProject)}<option value={config.Projects[name].DashboardProject}>{config.Projects[name].DashboardProject}</option>{/if}
+                        {#each dashCand.projects as p (p.ref)}<option value={p.ref}>{p.name}{p.customer ? ' · ' + p.customer : ''}</option>{/each}
+                      </select>
                     </label>
                     <label>
                       Extra instructions for Claude (added to the prompt)
@@ -695,6 +826,7 @@
       </div>
 
       <div class="footer-actions">
+        {#if saveError}<span class="save-note err" role="alert">{saveError}</span>{:else if dirty}<span class="save-note">Unsaved changes</span>{:else if justSaved}<span class="save-note ok">Saved ✓</span>{/if}
         <button class="btn-primary" onclick={saveConfig}>Save settings</button>
       </div>
     </section>
@@ -712,7 +844,7 @@
       </div>
 
       <ul class="status-list">
-        {#each Object.keys(statuses) as name}
+        {#each Object.keys(statuses) as name (name)}
           <li class="status-item confirm-item">
             <button class="status-btn" onclick={() => { prevView = 'running'; detailProject = name; view = 'detail'; }}>
               <span class="status-indicator status-{statuses[name]}"></span>
@@ -791,95 +923,6 @@
 </main>
 
 <style>
-  /* Dynamate brand tokens. Light is default, dark follows the OS. */
-  :global(:root) {
-    --navy: #03102b;
-    --beige: #ede9e3;
-    --cream: #fffbf5;
-    --warm: #f5f1e9;
-    --warm-strong: #e3ddd3;
-    --grey: #d8d9d8;
-    --blue: #06428f;
-    --red: #f1062c;
-    --sky: #78caf0;
-
-    --bg: var(--beige);
-    --surface: var(--cream);
-    --text: var(--navy);
-    --text-muted: #4b566c;
-    --border: var(--grey);
-    --border-strong: #b9bcc2;
-    --hover: var(--warm);
-    --selected: var(--warm-strong);
-    --accent: var(--blue);
-    --accent-hover: #04336f;
-    --on-accent: var(--cream);
-    --danger: #c70522;
-    --danger-bg: #fde8eb;
-    --success: #14703f;
-    --warn: #c76a00;
-    --success-bg: #dff1e7;
-    --running: var(--blue);
-    --running-bg: #dcf0fb;
-    --running-dot: var(--sky);
-    --terminal-bg: var(--navy);
-    --terminal-text: #e8e4dc;
-    --focus: var(--blue);
-
-    --font-head: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, monospace;
-    --font-body: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    --font-mono: ui-monospace, 'SF Mono', Menlo, monospace;
-    --radius: 6px;
-    --radius-sm: 4px;
-    color-scheme: light;
-  }
-
-  /* data-theme is always set from script (system preference resolved there) */
-  :global(:root[data-theme='dark']) {
-    --bg: var(--navy);
-    --surface: #07173a;
-    --text: var(--cream);
-    --text-muted: #a3adc2;
-    --border: #1c2c52;
-    --border-strong: #2f4274;
-    --hover: #0c1f48;
-    --selected: #12295a;
-    --accent: var(--sky);
-    --accent-hover: #9ad6f5;
-    --on-accent: var(--navy);
-    --danger: #ff5a73;
-    --danger-bg: #3a0f22;
-    --success: #5fd39a;
-    --warn: #ffb454;
-    --success-bg: #0d2e2a;
-    --running: var(--sky);
-    --running-bg: #0b2a4d;
-    --running-dot: var(--sky);
-    --terminal-bg: #020b1f;
-    --terminal-text: #e3ddd3;
-    --focus: var(--sky);
-    color-scheme: dark;
-  }
-
-  :global(*) {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
-  }
-
-  :global(body) {
-    font-family: var(--font-body);
-    background: var(--bg);
-    color: var(--text);
-    overflow: hidden;
-    height: 100vh;
-    -webkit-font-smoothing: antialiased;
-  }
-
-  :global(:focus-visible) {
-    outline: 2px solid var(--focus);
-    outline-offset: 2px;
-  }
 
   main {
     display: flex;
@@ -899,6 +942,8 @@
   header {
     user-select: none;
     display: flex;
+    flex-wrap: wrap;
+    gap: 10px 16px;
     align-items: center;
     justify-content: space-between;
     padding-bottom: 14px;
@@ -914,10 +959,10 @@
     font-size: 1.35rem;
     font-weight: 800;
     letter-spacing: -0.02em;
+    display: flex;
+    align-items: center;
+    gap: 10px;
   }
-
-  /* the spark: the leading diamond is the one red accent */
-  h1 { display: flex; align-items: center; gap: 10px; }
   /* Dynamate spark: theme text colour (navy on light, cream on dark), no tile */
   .spark { width: 1.6em; height: 1.6em; padding: 0.3em; flex: none; border-radius: 0.35em; color: var(--text); box-sizing: border-box; }
 
@@ -935,28 +980,6 @@
   }
 
   nav button.help { width: 1.9em; padding-left: 0; padding-right: 0; border-radius: 50%; }
-  .tour-block { position: fixed; inset: 0; z-index: 100; }
-  .tour-dim { position: fixed; inset: 0; z-index: 101; background: rgba(3, 16, 43, 0.6); }
-  .tour-spot {
-    position: fixed; z-index: 101; border-radius: 10px; pointer-events: none;
-    box-shadow: 0 0 0 9999px rgba(3, 16, 43, 0.6), 0 0 0 2px var(--accent);
-    transition: all 0.2s ease;
-  }
-  .tour-card {
-    position: fixed; z-index: 102; width: 320px; padding: 16px;
-    background: var(--surface); color: var(--text);
-    border: 1px solid var(--border-strong); border-radius: var(--radius);
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
-  }
-  .welcome-wrap { position: fixed; inset: 0; z-index: 102; display: grid; place-items: center; pointer-events: none; }
-  .tour-card.welcome { position: static; width: 540px; pointer-events: auto; }
-  .welcome-fields { display: grid; gap: 14px; margin-top: 14px; }
-  .welcome-fields .seg { flex-wrap: wrap; }
-  .tour-card h3 { margin: 4px 0 6px; }
-  .tour-card p { font-size: 0.9rem; line-height: 1.45; }
-  .tour-count { font-size: 0.72rem; color: var(--text-muted); }
-  .tour-actions { display: flex; gap: 8px; margin-top: 14px; align-items: center; }
-  .tour-actions .spacer { flex: 1; }
 
   nav {
     display: flex;
@@ -997,7 +1020,7 @@
   /* tabs scroll; the Save bar stays pinned to the bottom of the window */
   .config-panel { gap: 0; }
   .config-panel .settings-layout { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: 14px; }
-  .config-panel .footer-actions { flex: none; }
+  .config-panel .footer-actions { flex: none; padding-top: 12px; margin-bottom: 0; }
   .settings-section {
     display: grid;
     grid-template-columns: 1fr; /* the tab names the section, head sits above the fields */
@@ -1018,18 +1041,6 @@
   .settings-tabs button:hover { background: var(--hover); color: var(--text); }
   .settings-tabs button.on { background: var(--selected); color: var(--text); box-shadow: inset 3px 0 0 var(--accent); }
   .settings-section[hidden] { display: none; }
-  .seg {
-    display: inline-flex; align-self: flex-start; padding: 3px; gap: 2px;
-    background: var(--bg); border: 1px solid var(--border-strong); border-radius: 10px;
-  }
-  .seg button {
-    background: none; border: 0; border-radius: 7px; padding: 6px 14px;
-    font: 600 0.85rem var(--font-body); color: var(--text-muted); cursor: pointer;
-    transition: background 0.15s, color 0.15s;
-  }
-  .seg-sm button { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; font-size: 0.78rem; }
-  .seg button:hover { color: var(--text); }
-  .seg button.on { background: var(--accent); color: var(--on-accent); }
   .replay { align-self: flex-start; }
   .section-head h3 { margin: 0 0 4px; }
   .section-head .hint { margin: 0; }
@@ -1038,19 +1049,7 @@
   .three-col { grid-template-columns: 1fr 1fr 1fr; }
   .span-2 { grid-column: span 2; }
   .span-3 { grid-column: 1 / -1; }
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    font-size: 0.8rem;
-    font-weight: 600;
-    color: var(--text-muted);
-    min-width: 0;
-  }
-  .field .hint { font-weight: 400; }
-  .field.narrow { max-width: 160px; }
-  .advanced { display: flex; flex-direction: column; gap: 12px; }
-  .advanced[open] { display: grid; gap: 12px; }
+  .advanced { display: grid; gap: 12px; }
   .advanced summary {
     cursor: pointer;
     font-size: 0.8rem;
@@ -1059,7 +1058,6 @@
     width: max-content;
   }
   @media (max-width: 760px) {
-    .settings-section { grid-template-columns: 1fr; gap: 10px; }
     .settings-layout { grid-template-columns: 1fr; }
     .settings-tabs { position: static; flex-direction: row; flex-wrap: wrap; }
     .two-col, .three-col { grid-template-columns: 1fr; }
@@ -1068,7 +1066,6 @@
   .config-panel .project-configs {
     overflow: visible;
   }
-  .config-panel .footer-actions { padding-top: 12px; margin-bottom: 0; }
 
   .panel-header {
     display: flex;
@@ -1113,10 +1110,26 @@
   .project-list .namecell { display: flex; align-items: center; gap: 8px; min-width: 0; }
 
   .project-list .core { display: inline-flex; align-items: center; gap: 6px; font: 0.78rem var(--font-mono); color: var(--text-muted); opacity: 0.8; }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); flex: none; }
-  .dot-current { background: var(--success); }
-  .dot-behind { background: var(--warn); }
-  .dot-security { background: var(--danger); }
+  .save-note { margin-right: 12px; font-size: 0.82rem; color: var(--text-muted); align-self: center; }
+  .save-note.err { color: var(--danger); }
+  .save-note.ok { color: var(--success); }
+  .hint.err { color: var(--danger); }
+  .sla { cursor: pointer; background: none; font-family: inherit; flex: none; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border-strong); color: var(--text-muted); }
+  .sla.stale { border-style: dashed; opacity: 0.7; }
+  .dash-link { flex: none; background: none; border: 0; padding: 0 2px; color: var(--text-muted); cursor: pointer; font-size: 0.85rem; }
+  .dash-link:hover { color: var(--accent); }
+  .unmatched { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+  .unmatched li { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 18rem); gap: 6px 10px; align-items: center; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); }
+  .unmatched .local { font: 0.82rem var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .unmatched select { min-width: 0; width: 100%; }
+  .unmatched .sugg { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
+  .unmatched .sugg:empty { display: none; }
+  .unmatched .sugg .btn-sm { white-space: nowrap; }
+  .unmatched .why-line { grid-column: 1 / -1; }
+  .unmatched .pick { grid-column: 1 / -1; }
+  .dash-state { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .dash-ok { color: var(--success); font-weight: 600; font-size: 0.85rem; }
+  .core-note { max-width: 22rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   .project-list input[type="checkbox"] {
     accent-color: var(--accent);
@@ -1199,6 +1212,10 @@
 
   @media (prefers-reduced-motion: reduce) {
     .status-running { animation: none; }
+    .mode-switch, .mode-switch .knob { transition: none; }
+  }
+  @media (max-width: 860px) {
+    .mode-hint { display: none; }
   }
 
   .status-label {
@@ -1232,6 +1249,7 @@
 
   .footer-actions {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 12px;
     padding-top: 14px;
@@ -1288,39 +1306,10 @@
 
   select { cursor: pointer; }
 
-  .btn-primary {
-    background: var(--accent);
-    color: var(--on-accent);
-    border: 1px solid var(--accent);
-    padding: 8px 18px;
-    border-radius: var(--radius);
-    font: 700 0.85rem var(--font-body);
-    cursor: pointer;
-    transition: background 0.15s, border-color 0.15s;
-    margin-left: auto;
-  }
-
-  .btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
-  .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
-
-  .btn-sm {
-    background: transparent;
-    border: 1px solid var(--border-strong);
-    color: var(--text);
-    padding: 4px 10px;
-    border-radius: var(--radius-sm);
-    font: 600 0.75rem var(--font-body);
-    cursor: pointer;
-    transition: background 0.15s, border-color 0.15s;
-  }
-
-  .btn-sm:hover { background: var(--hover); border-color: var(--text); }
-  .btn-sm:disabled { opacity: 0.4; cursor: not-allowed; }
-
   .btn-danger { border-color: var(--danger); color: var(--danger); }
   .btn-danger:hover { background: var(--danger-bg); border-color: var(--danger); }
 
-  .project-config-edit label {
+  .project-config-edit label, .edit-field {
     display: flex;
     flex-direction: column;
     gap: 4px;
@@ -1414,14 +1403,6 @@
     color: var(--text-muted);
   }
 
-  .hint {
-    font-size: 0.78rem;
-    color: var(--text-muted);
-    line-height: 1.45;
-  }
-
-  .actions { margin-left: auto; }
-
   .search-box {
     flex: 1;
     max-width: 250px;
@@ -1437,9 +1418,8 @@
   .confirm-item {
     padding: 10px 14px;
     gap: 10px;
+    flex-wrap: wrap;
   }
-
-  .confirm-item .name { font-weight: 600; }
 
   .branch-name-input {
     flex: 1;

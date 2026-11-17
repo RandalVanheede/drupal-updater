@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"drupal-updater/logging"
 
@@ -15,6 +16,9 @@ import (
 // YAML is a superset of JSON, so a JSON body works too.
 const ProjectFile = "drupal-updater.yaml"
 
+// DefaultDashboardURL is used when dashboard_url is empty. Nothing is requested from it before the user connects.
+const DefaultDashboardURL = "https://applications.dyna-ops.be/api/mcp"
+
 type ProjectConfig struct {
 	GitStartBranch      string   `yaml:"git_start_branch,omitempty" json:"GitStartBranch"`
 	GitNewBranchPattern string   `yaml:"git_new_branch_pattern,omitempty" json:"GitNewBranchPattern"`
@@ -23,6 +27,7 @@ type ProjectConfig struct {
 	ClaudeInstructions  string   `yaml:"claude_instructions,omitempty" json:"ClaudeInstructions"` // extra per-project prompt text
 	GitMergeTarget      string   `yaml:"git_merge_target,omitempty" json:"GitMergeTarget"`        // merge request target; default: the start branch
 	GitCommitMessage    string   `yaml:"git_commit_message,omitempty" json:"GitCommitMessage"`    // commit made before the merge request; {date} = YYYY-MM-DD
+	DashboardProject    string   `yaml:"dashboard_project,omitempty" json:"DashboardProject"`     // this project's name (or id) in the applications dashboard, when it differs from the folder name
 }
 
 type Config struct {
@@ -40,6 +45,7 @@ type Config struct {
 	ExcludedProjects     []string                 `yaml:"excluded_projects" json:"ExcludedProjects"`
 	Defaults             ProjectConfig            `yaml:"defaults,omitempty" json:"Defaults"` // for every project, under its own projects: entry
 	Projects             map[string]ProjectConfig `yaml:"projects" json:"Projects"`
+	DashboardURL         string                   `yaml:"dashboard_url,omitempty" json:"DashboardURL"` // applications dashboard (MCP server) to show SLA, customer and pending security modules from; empty = off
 }
 
 // Project is a project's local settings: its projects: entry over the global defaults.
@@ -104,6 +110,7 @@ func overlay(dst *ProjectConfig, src ProjectConfig) {
 	pick(&dst.ClaudeInstructions, src.ClaudeInstructions)
 	pick(&dst.GitMergeTarget, src.GitMergeTarget)
 	pick(&dst.GitCommitMessage, src.GitCommitMessage)
+	pick(&dst.DashboardProject, src.DashboardProject)
 	if src.IgnoredPackages != nil {
 		dst.IgnoredPackages = src.IgnoredPackages
 	}
@@ -127,7 +134,7 @@ func SaveProjectFile(projectPath string, pc ProjectConfig) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(projectPath, ProjectFile), data, 0o644)
+	return WriteFileAtomic(path, data, 0o644)
 }
 
 func SaveConfig(path string, cfg *Config) error {
@@ -149,7 +156,42 @@ func SaveConfig(path string, cfg *Config) error {
 		return err
 	}
 
-	return os.WriteFile(path, data, 0644)
+	return WriteFileAtomic(path, data, 0644)
+}
+
+// WriteFileAtomic writes to a temp file next to path and renames it over, so a crash mid-write never
+// leaves a truncated file behind.
+func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name()) // no-op after a successful rename
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if fi, err := os.Stat(path); err == nil {
+		perm = fi.Mode().Perm() // keep the mode of a file that is already there (a config the user made 0600 stays so)
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
+
+// BackupBadConfig moves an unreadable config aside to <path>.bad and returns that path, so that running on
+// defaults and saving later cannot destroy the user's file.
+func BackupBadConfig(path string) (string, error) {
+	if _, err := os.Stat(path); err != nil {
+		return "", err
+	}
+	bad := path + ".bad-" + time.Now().Format("20060102-150405") // never replaces an earlier backup
+	return bad, os.Rename(path, bad)
 }
 
 func LoadConfig(path string) (*Config, error) {

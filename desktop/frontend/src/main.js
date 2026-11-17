@@ -1,3 +1,4 @@
+import './app.css'
 import '@fontsource-variable/atkinson-hyperlegible-next'
 import '@fontsource-variable/space-grotesk'
 import '@fontsource-variable/jetbrains-mono'

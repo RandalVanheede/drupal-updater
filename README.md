@@ -1,11 +1,14 @@
 # Drupal Updater
 
-Batch-updates local Drupal projects. Two frontends share one Go engine: a terminal UI ([Bubbletea](https://github.com/charmbracelet/bubbletea)) and a desktop app ([Wails](https://wails.io) + Svelte). Runs on macOS and Linu## Architecture
+Batch-updates local Drupal projects. Two frontends share one Go engine: a terminal UI ([Bubbletea](https://github.com/charmbracelet/bubbletea)) and a desktop app ([Wails](https://wails.io) + Svelte). Runs on macOS and Linux.
+
+## Architecture
 
 ```
 drupal-updater/
 ├── main.go          # TUI entrypoint (`--config` opens the config editor, `api` is a hidden JSON CLI)
-├── api/             # JSON/stdin/stdout commands used by the desktop app
+├── api/             # hidden `api` subcommand: JSON over stdin/stdout for scripting (the desktop app calls Go bindings directly)
+├── coreupdates/     # Drupal core release history (updates.drupal.org) and installed-vs-latest status
 ├── config/          # YAML config loading & per-project defaults
 ├── discovery/       # Auto-detects Drupal/DDEV projects in the base folders
 ├── executor/        # Runs updates per project (Claude in tmux)
@@ -26,11 +29,9 @@ drupal-updater/
 
 Wails can't cross-compile between operating systems or CPUs (webkit needs cgo), so `build-linux-docker.sh` builds inside a Linux container per architecture; a foreign CPU is emulated by Docker and takes several minutes. On Linux, tmux and claude must be installed on the system.
 
-``
-
 ## Releases
 
-Semantic versioning; changes go in `CHANGELOG.md` (Keep a Changelog). Work happens on release branches named `<major>.<minor>.x` (currently `1.0.x`). To release: move the `[Unreleased]` entries into a new version section, commit, then `git tag vX.Y.Z && git push origin 1.0.x vX.Y.Z`. CI (`.github/workflows/build.yml`) tests every push and, for a `v*` tag, builds the macOS DMG (arm64) plus macOS TUI binaries and the Linux tarballs (amd64, arm64), and publishes them as a GitHub release with that version's changelog section as notes.
+Semantic versioning; changes go in `CHANGELOG.md` (Keep a Changelog). Work happens on release branches named `<major>.<minor>.x` (currently `1.2.x`; a new minor version starts a new branch). To release: move the `[Unreleased]` entries into a new version section, commit, then `git tag vX.Y.Z && git push origin <branch> vX.Y.Z`. CI (`.github/workflows/build.yml`) tests every push and, for a `v*` tag, builds the macOS DMG (arm64) plus macOS TUI binaries and the Linux tarballs (amd64, arm64), and publishes them as a GitHub release with that version's changelog section as notes.
 
 ## Configuration
 
@@ -115,7 +116,19 @@ On startup the app scans every base folder for subdirectories (down to `scan_dep
 
 Each match, plus every `project_paths` entry, becomes a selectable project. A project is named after its folder; when two projects share a folder name, both are shown as `<parent>/<folder>` (or the full path if that still clashes). That name is also the key under `projects:`, so settings stored under the plain folder name must be moved when a duplicate appears.
 
+## Desktop flow
+
+- **First launch:** a welcome card asks for theme (system, light, dark), font (Atkinson Hyperlegible, JetBrains Mono, Space Grotesk) and font size, then a short guided tour starts. Replay it with the `?` button in the header or from Settings → Appearance. These preferences live in the webview's local storage (per machine), not in `config.yaml`; the window size is remembered in `~/.config/drupal-updater/window.json`.
+- **Project list:** each row shows the installed Drupal core version with a status dot: green = newest release of its major, orange = behind but no security update, red = a security update is available (or the installed release is flagged insecure). The version comes from `composer.lock` on origin's start branch (`git_start_branch`), so a stale local checkout does not show as out of date; without such a branch the working-tree lock file is used. Filter by name and by status (all, up to date, behind, security); Toggle All acts on the rows the filters show.
+- **Refreshing:** origin is fetched at most once per 24 hours per project (judged by the age of `.git/FETCH_HEAD`, so a fetch you ran yourself counts), 4 projects at a time, never for a project that is updating, and a failed fetch (offline, no key) is not retried until the app restarts. The **Refresh** button fetches everything now and downloads Drupal's release list again. The list is cached for an hour; offline, the dots are simply left out and a note says so.
+- **Mode:** the Standard/Disaster switch below the list chooses all minor and patch updates or security fixes only.
+- **Running:** a finished project can be confirmed, retried, turned into a merge request and dismissed right away. A run that fails or times out keeps any work it committed on a `drupal-updater/failed-<project>-<time>` branch. Closing the window while updates run asks first.
+- **Dashboard (optional):** Settings → Dashboard connects to Dynamate's applications dashboard (`dashboard_url`, default `https://applications.dyna-ops.be/api/mcp`) with a read-only browser sign-in. Matched projects get an SLA tag with a detail card and a link; filter by SLA. Projects are matched by name, then detected from the git remote's group, the DDEV project name and the Drupal site name; confirm or fix a match in the settings tab, which saves `dashboard_project: <name>` in the project's `drupal-updater.yaml`. The dashboard's module data comes from connectors on each site and can be days old (the card says so); the version dots always come from the repository.
+- **Settings:** vertical tabs; Save is pinned at the bottom and an "Unsaved changes" note shows when something is edited. An unreadable `config.yaml` is kept as `config.yaml.bad` and the app starts on defaults with a notice.
+
 ## TUI Flow
+
+The project list shows each project's installed Drupal core version with a marker (green ● newest release, yellow ■ behind, red ◆ security update available), read the same way as in the desktop app (origin's start branch, fetched at most daily). `r` fetches everything now and re-checks Drupal's releases.
 
 1. **List View** — Scrollable list of detected projects with checkboxes. Toggle individual projects with `space`/`enter`, toggle all with `a`, start update with `u`, switch update mode with `m`, open settings with `S`, install an available update with `U`.
 2. **Running View** — Shows live status per project (`IDLE`, `RUNNING`, `SUCCESS`, `FAILED`) and the live Claude session.

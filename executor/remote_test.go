@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -70,4 +71,63 @@ func mustRead(t *testing.T, p string) []byte {
 		t.Fatal(err)
 	}
 	return b
+}
+
+func TestCleanupKeepWork(t *testing.T) {
+	t.Setenv("GIT_AUTHOR_NAME", "t")
+	t.Setenv("GIT_AUTHOR_EMAIL", "t@example.com")
+	t.Setenv("GIT_COMMITTER_NAME", "t")
+	t.Setenv("GIT_COMMITTER_EMAIL", "t@example.com")
+	repo := t.TempDir()
+	run(t, repo, "init", "-q", "-b", "main")
+	os.WriteFile(filepath.Join(repo, "a"), []byte("1"), 0o644)
+	run(t, repo, "add", ".")
+	run(t, repo, "commit", "-qm", "base")
+
+	// temp branch with a commit: renamed, not deleted
+	run(t, repo, "checkout", "-qb", "drupal-updater/temp-site")
+	os.WriteFile(filepath.Join(repo, "a"), []byte("2"), 0o644)
+	run(t, repo, "commit", "-qam", "work")
+	kept, err := CleanupKeepWork(repo, "master|main", "drupal-updater/temp-site")
+	if err != nil || !strings.HasPrefix(kept, "drupal-updater/failed-site-") {
+		t.Fatalf("kept %q err %v", kept, err)
+	}
+	run(t, repo, "rev-parse", "--verify", "refs/heads/"+kept)
+	if out, _ := git(repo, "rev-parse", "--verify", "--quiet", "refs/heads/drupal-updater/temp-site"); out != "" {
+		t.Fatal("temp branch should be gone")
+	}
+	if cur, _ := git(repo, "branch", "--show-current"); strings.TrimSpace(cur) != "main" {
+		t.Fatalf("expected to be back on main, on %q", cur)
+	}
+
+	// temp branch without new commits: deleted as before
+	run(t, repo, "checkout", "-qb", "drupal-updater/temp-empty")
+	kept, err = CleanupKeepWork(repo, "main", "drupal-updater/temp-empty")
+	if err != nil || kept != "" {
+		t.Fatalf("empty branch: kept %q err %v", kept, err)
+	}
+	if out, _ := git(repo, "rev-parse", "--verify", "--quiet", "refs/heads/drupal-updater/temp-empty"); out != "" {
+		t.Fatal("empty temp branch should be deleted")
+	}
+}
+
+func TestCleanupKeepWorkSurvivesAnAmbiguousBranchName(t *testing.T) {
+	t.Setenv("GIT_AUTHOR_NAME", "t")
+	t.Setenv("GIT_AUTHOR_EMAIL", "t@example.com")
+	t.Setenv("GIT_COMMITTER_NAME", "t")
+	t.Setenv("GIT_COMMITTER_EMAIL", "t@example.com")
+	repo := t.TempDir()
+	run(t, repo, "init", "-q", "-b", "main")
+	os.WriteFile(filepath.Join(repo, "a"), []byte("1"), 0o644)
+	run(t, repo, "add", ".")
+	run(t, repo, "commit", "-qm", "base")
+	run(t, repo, "tag", "main") // a tag named like the start branch: git warns "refname 'main' is ambiguous"
+	run(t, repo, "checkout", "-qb", "drupal-updater/temp-x")
+	os.WriteFile(filepath.Join(repo, "a"), []byte("2"), 0o644)
+	run(t, repo, "commit", "-qam", "work")
+	kept, err := CleanupKeepWork(repo, "main", "drupal-updater/temp-x")
+	if err != nil || kept == "" {
+		t.Fatalf("the finished work must be kept, not deleted: %q %v", kept, err)
+	}
+	run(t, repo, "rev-parse", "--verify", "refs/heads/"+kept)
 }

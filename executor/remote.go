@@ -23,11 +23,16 @@ func gitCmd(ctx context.Context, dir string, env []string, args ...string) *exec
 // prompt (no terminal, ssh BatchMode unless GIT_SSH_COMMAND is set) and stops when ctx ends.
 func FetchOrigin(ctx context.Context, dir string) error {
 	env := EnrichedEnv()
-	// the env var would override a core.sshCommand the user set (a specific key, say), so only fill the gap
-	if os.Getenv("GIT_SSH_COMMAND") == "" && gitCmd(ctx, dir, env, "config", "--get", "core.sshCommand").Run() != nil {
+	args := []string{"-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=15", "-c", "core.gitProxy="}
+	// Only an ssh command the user set outside the repo is honoured: .git/config is writable from the ddev containers,
+	// and a command in it would run on the host. A user-level core.sshCommand is passed on explicitly (it beats the
+	// repo's); otherwise BatchMode is set through the environment, which beats it as well.
+	if v, err := gitCmd(ctx, dir, env, "config", "--global", "--get", "core.sshCommand").Output(); err == nil && strings.TrimSpace(string(v)) != "" {
+		args = append(args, "-c", "core.sshCommand="+strings.TrimSpace(string(v)))
+	} else if os.Getenv("GIT_SSH_COMMAND") == "" {
 		env = append(env, "GIT_SSH_COMMAND=ssh -o BatchMode=yes -o ConnectTimeout=10")
 	}
-	return gitCmd(ctx, dir, env, "fetch", "--quiet", "--no-tags", "--no-recurse-submodules", "origin").Run()
+	return gitCmd(ctx, dir, env, append(args, "fetch", "--quiet", "--no-tags", "--no-recurse-submodules", "origin")...).Run()
 }
 
 // RemoteStartFile returns file as committed on origin's start branch: the first name of the "|"-separated
@@ -61,7 +66,13 @@ func RemoteStartFile(ctx context.Context, dir, configured, file string) ([]byte,
 		return nil, err
 	}
 	// shortcut: lock files are well under 16MB; raise the cap if a project ever exceeds it
-	data, readErr := io.ReadAll(io.LimitReader(out, 16<<20))
+	const limit = 16 << 20
+	data, readErr := io.ReadAll(io.LimitReader(out, limit+1))
+	if len(data) > limit {
+		cmd.Process.Kill() // nobody reads the rest: do not wait for git to block on a full pipe
+		cmd.Wait()
+		return nil, errors.New("composer.lock is larger than 16MB")
+	}
 	waitErr := cmd.Wait()
 	if readErr != nil {
 		return nil, readErr

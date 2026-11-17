@@ -8,6 +8,7 @@ export namespace config {
 	    ClaudeInstructions: string;
 	    GitMergeTarget: string;
 	    GitCommitMessage: string;
+	    DashboardProject: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ProjectConfig(source);
@@ -22,6 +23,7 @@ export namespace config {
 	        this.ClaudeInstructions = source["ClaudeInstructions"];
 	        this.GitMergeTarget = source["GitMergeTarget"];
 	        this.GitCommitMessage = source["GitCommitMessage"];
+	        this.DashboardProject = source["DashboardProject"];
 	    }
 	}
 	export class Config {
@@ -38,6 +40,7 @@ export namespace config {
 	    ExcludedProjects: string[];
 	    Defaults: ProjectConfig;
 	    Projects: Record<string, ProjectConfig>;
+	    DashboardURL: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Config(source);
@@ -58,6 +61,7 @@ export namespace config {
 	        this.ExcludedProjects = source["ExcludedProjects"];
 	        this.Defaults = this.convertValues(source["Defaults"], ProjectConfig);
 	        this.Projects = this.convertValues(source["Projects"], ProjectConfig, true);
+	        this.DashboardURL = source["DashboardURL"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -81,8 +85,126 @@ export namespace config {
 
 }
 
+export namespace coreupdates {
+	
+	export class Refresh {
+	    version: string;
+	    fetchFailed: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Refresh(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.version = source["version"];
+	        this.fetchFailed = source["fetchFailed"];
+	    }
+	}
+
+}
+
 export namespace main {
 	
+	export class UnmatchedProject {
+	    local: string;
+	    suggestions: DashRef[];
+	
+	    static createFrom(source: any = {}) {
+	        return new UnmatchedProject(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.local = source["local"];
+	        this.suggestions = this.convertValues(source["suggestions"], DashRef);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class DashRef {
+	    ref: string;
+	    name: string;
+	    customer: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DashRef(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ref = source["ref"];
+	        this.name = source["name"];
+	        this.customer = source["customer"];
+	    }
+	}
+	export class DashCandidates {
+	    projects: DashRef[];
+	    unmatched: UnmatchedProject[];
+	
+	    static createFrom(source: any = {}) {
+	        return new DashCandidates(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.projects = this.convertValues(source["projects"], DashRef);
+	        this.unmatched = this.convertValues(source["unmatched"], UnmatchedProject);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class DashboardState {
+	    configured: boolean;
+	    error?: string;
+	    signedIn: boolean;
+	    server: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DashboardState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.configured = source["configured"];
+	        this.error = source["error"];
+	        this.signedIn = source["signedIn"];
+	        this.server = source["server"];
+	    }
+	}
 	export class ProjectInfo {
 	    name: string;
 	    path: string;
@@ -101,6 +223,7 @@ export namespace main {
 	        this.core = source["core"];
 	    }
 	}
+	
 	export class UpdateRequest {
 	    projects: string[];
 	

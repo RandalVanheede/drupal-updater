@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -142,6 +143,31 @@ func RenameBranch(projectPath, oldBranch, newBranch string) error {
 		return fmt.Errorf("git branch -m failed: %v\n%s", err, out)
 	}
 	return nil
+}
+
+// CleanupKeepWork is Cleanup for a run that failed: when tempBranch holds commits that startBranch does not,
+// it is renamed to drupal-updater/failed-<project>-<time> instead of deleted, and that name is returned
+// (empty when nothing was worth keeping), so a timeout or a bad result never throws away finished work.
+func CleanupKeepWork(projectPath, startBranch, tempBranch string) (string, error) {
+	resolved := ResolveStartBranch(projectPath, startBranch)
+	if tempBranch == "" || !safeBranch.MatchString(resolved) || !safeBranch.MatchString(tempBranch) {
+		return "", Cleanup(projectPath, startBranch, tempBranch)
+	}
+	// Fully qualified refs (a tag named like the branch would make a short name ambiguous) and stdout only (git warnings
+	// go to stderr). Only a count that is provably zero allows deleting: when in doubt the work is kept.
+	cmd := gitCmd(context.Background(), projectPath, EnrichedEnv(), "rev-list", "--count", "refs/heads/"+resolved+"..refs/heads/"+tempBranch, "--")
+	raw, err := cmd.Output()
+	if n, convErr := strconv.Atoi(strings.TrimSpace(string(raw))); err == nil && convErr == nil && n == 0 {
+		return "", Cleanup(projectPath, startBranch, tempBranch)
+	}
+	if err := Cleanup(projectPath, startBranch, ""); err != nil { // back on the start branch, temp branch untouched
+		return "", err
+	}
+	kept := "drupal-updater/failed-" + strings.TrimPrefix(tempBranch, "drupal-updater/temp-") + "-" + time.Now().Format("20060102-150405")
+	if out, err := git(projectPath, "branch", "-m", "--", tempBranch, kept); err != nil {
+		return "", fmt.Errorf("could not keep %s: %v\n%s", tempBranch, err, out)
+	}
+	return kept, nil
 }
 
 // Cleanup returns the project to startBranch (stashing a dirty tree if needed)

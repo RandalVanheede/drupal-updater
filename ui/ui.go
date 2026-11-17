@@ -7,8 +7,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"drupal-updater/config"
+	"drupal-updater/coreupdates"
 	"drupal-updater/discovery"
 	"drupal-updater/executor"
 	"drupal-updater/logging"
@@ -29,13 +31,25 @@ const (
 	StateSettings
 )
 
+// coreMsg carries the result of a core version lookup (see loadCores).
+type coreMsg struct {
+	versions map[string]string // project name -> installed core version on origin
+	statuses map[string]coreupdates.Result
+	failed   int // projects whose origin could not be fetched
+}
+
 type model struct {
-	cfg      *config.Config
-	projects []discovery.Project
-	selected map[string]bool
-	status   map[string]string
-	logs     map[string]string
-	screens  map[string]string // live Claude terminal per project
+	core       *coreupdates.Tracker
+	coreVer    map[string]string
+	coreStatus map[string]coreupdates.Result
+	coreBusy   bool
+	coreNote   string
+	cfg        *config.Config
+	projects   []discovery.Project
+	selected   map[string]bool
+	status     map[string]string
+	logs       map[string]string
+	screens    map[string]string // live Claude terminal per project
 
 	cursor    int
 	state     int
@@ -225,6 +239,9 @@ func New(cfg *config.Config, projects []discovery.Project, configPath, version s
 		configPath:     configPath,
 		version:        version,
 		repoFile:       make(map[string]bool),
+		core:           &coreupdates.Tracker{},
+		coreVer:        make(map[string]string),
+		coreStatus:     make(map[string]coreupdates.Result),
 	}
 
 	for _, p := range projects {
@@ -237,9 +254,57 @@ func New(cfg *config.Config, projects []discovery.Project, configPath, version s
 	return m
 }
 
+// loadCores reads every project's Drupal core version from origin's start branch (4 at a time; origin is
+// fetched at most daily, or always when force is set) and compares them with Drupal's releases.
+func (m *model) loadCores(force bool) tea.Cmd {
+	type job struct{ name, path, start string }
+	jobs := make(chan job, len(m.projects))
+	for _, p := range m.projects {
+		jobs <- job{p.Name, p.Path, config.ForProject(m.cfg.Project(p.Name), p.Path).GitStartBranch}
+	}
+	close(jobs)
+	tracker := m.core
+	m.coreBusy = true
+	return func() tea.Msg {
+		if force {
+			tracker.ResetReleases()
+		}
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		versions, failed := map[string]string{}, 0
+		for i := 0; i < 4; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for j := range jobs {
+					r := tracker.Refresh(j.path, j.start, force, false)
+					mu.Lock()
+					if r.Version != "" {
+						versions[j.name] = r.Version
+					}
+					if r.FetchFailed {
+						failed++
+					}
+					mu.Unlock()
+				}
+			}()
+		}
+		wg.Wait()
+		uniq := map[string]bool{}
+		var list []string
+		for _, v := range versions {
+			if !uniq[v] {
+				uniq[v] = true
+				list = append(list, v)
+			}
+		}
+		return coreMsg{versions: versions, statuses: tracker.Statuses(list), failed: failed}
+	}
+}
+
 func (m *model) Init() tea.Cmd {
 	v := m.version
-	return tea.Batch(textinput.Blink, func() tea.Msg {
+	return tea.Batch(textinput.Blink, m.loadCores(false), func() tea.Msg {
 		r, err := updater.Check(v, true)
 		if err != nil {
 			logging.Error("update check: %v", err)
@@ -301,6 +366,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case settingsClosedMsg:
 		m.closeSettings()
+		return m, nil
+	case coreMsg:
+		m.coreBusy = false
+		m.coreVer, m.coreStatus, m.coreNote = msg.versions, msg.statuses, ""
+		if msg.failed > 0 {
+			m.coreNote = fmt.Sprintf("%d projects could not be fetched (offline?), versions may be old", msg.failed)
+		} else if len(msg.versions) > 0 && len(msg.statuses) == 0 {
+			m.coreNote = "Drupal's release list is unavailable, so there are no status markers"
+		}
 		return m, nil
 	case updateMsg:
 		switch {
@@ -435,6 +509,11 @@ func (m *model) updateList(msg tea.Msg) (*model, []tea.Cmd) {
 					m.selected[p.Name] = !allSelected
 				}
 				return m, nil
+			case "r": // fetch every project's origin now and re-check Drupal's releases
+				if m.coreBusy {
+					return m, nil
+				}
+				return m, []tea.Cmd{m.loadCores(true)}
 			case "m": // saved, like the desktop toggle
 				if m.cfg.UpdateMode == "disaster" {
 					m.cfg.UpdateMode = "standard"
@@ -1034,7 +1113,7 @@ func (m *model) View() string {
 			if m.repoFile[p.Name] {
 				name += progressStyle.Render("  repo config")
 			}
-			s.WriteString(fmt.Sprintf("  %s%s %s\n", cursor, checkbox, name))
+			s.WriteString(fmt.Sprintf("  %s%s %s%s\n", cursor, checkbox, name, m.coreMarker(p.Name)))
 		}
 
 		if end < len(m.projects) {
@@ -1056,7 +1135,14 @@ func (m *model) View() string {
 		s.WriteString(progressStyle.Render(fmt.Sprintf("  %d/%d selected · mode: %s", count, len(m.projects), mode)))
 		s.WriteString("\n\n")
 		s.WriteString("  " + helpKey("u", "update") + "  " + helpKey("a", "toggle all") + "  " + helpKey("space", "toggle") + "  " + helpKey("m", "mode") + "  " + helpKey("q", "quit"))
-		s.WriteString("\n  " + helpKey("S", "settings") + "  " + helpKey("type", "search") + "  " + helpKey("esc", "clear search"))
+		refresh := helpKey("r", "refresh versions")
+		if m.coreBusy {
+			refresh = progressStyle.Render("checking Drupal versions…")
+		}
+		s.WriteString("\n  " + helpKey("S", "settings") + "  " + helpKey("type", "search") + "  " + helpKey("esc", "clear search") + "  " + refresh)
+		if m.coreNote != "" {
+			s.WriteString("\n  " + progressStyle.Render("⚠ "+m.coreNote))
+		}
 		s.WriteString("\n")
 		if m.updateMsg != "" {
 			s.WriteString("\n  " + progressStyle.Render(m.updateMsg) + "\n")
@@ -1224,4 +1310,24 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// coreMarker is the installed Drupal core version with a coloured status marker: green = newest release of its
+// major, yellow = behind without a security update, red = security update available. Shape differs as well as
+// colour (● ■ ◆).
+func (m *model) coreMarker(name string) string {
+	v := m.coreVer[name]
+	if v == "" {
+		return ""
+	}
+	mark, color := "·", dimWhite
+	switch m.coreStatus[v].Status {
+	case coreupdates.UpToDate:
+		mark, color = "●", green
+	case coreupdates.Behind:
+		mark, color = "■", yellow
+	case coreupdates.Security:
+		mark, color = "◆", red
+	}
+	return "  " + lipgloss.NewStyle().Foreground(color).Render(mark) + " " + progressStyle.Render(v)
 }

@@ -1,0 +1,211 @@
+/* Shared by every component: tokens, base, buttons, form field, segmented control, status dots, tour and welcome dialogs. */
+/* Dynamate brand tokens. Light is the default; the Theme setting (or the OS) switches data-theme to dark. */
+:root {
+  --navy: #03102b;
+  --beige: #ede9e3;
+  --cream: #fffbf5;
+  --warm: #f5f1e9;
+  --warm-strong: #e3ddd3;
+  --grey: #d8d9d8;
+  --blue: #06428f;
+  --sky: #78caf0;
+
+  --bg: var(--beige);
+  --surface: var(--cream);
+  --text: var(--navy);
+  --text-muted: #4b566c;
+  --border: var(--grey);
+  --border-strong: #b9bcc2;
+  --hover: var(--warm);
+  --selected: var(--warm-strong);
+  --accent: var(--blue);
+  --accent-hover: #04336f;
+  --on-accent: var(--cream);
+  --danger: #c70522;
+  --danger-bg: #fde8eb;
+  --success: #14703f;
+  --warn: #c76a00;
+  --success-bg: #dff1e7;
+  --running: var(--blue);
+  --running-bg: #dcf0fb;
+  --running-dot: var(--sky);
+  --terminal-bg: var(--navy);
+  --terminal-text: #e8e4dc;
+  --focus: var(--blue);
+
+  --font-head: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, monospace;
+  --font-body: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, monospace;
+  --radius: 6px;
+  --radius-sm: 4px;
+  color-scheme: light;
+}
+
+/* data-theme is always set from script (system preference resolved there) */
+:root[data-theme='dark'] {
+  --bg: var(--navy);
+  --surface: #07173a;
+  --text: var(--cream);
+  --text-muted: #a3adc2;
+  --border: #1c2c52;
+  --border-strong: #2f4274;
+  --hover: #0c1f48;
+  --selected: #12295a;
+  --accent: var(--sky);
+  --accent-hover: #9ad6f5;
+  --on-accent: var(--navy);
+  --danger: #ff5a73;
+  --danger-bg: #3a0f22;
+  --success: #5fd39a;
+  --warn: #ffb454;
+  --success-bg: #0d2e2a;
+  --running: var(--sky);
+  --running-bg: #0b2a4d;
+  --running-dot: var(--sky);
+  --terminal-bg: #020b1f;
+  --terminal-text: #e3ddd3;
+  --focus: var(--sky);
+  color-scheme: dark;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: var(--font-body);
+  background: var(--bg);
+  color: var(--text);
+  overflow: hidden;
+  height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.notice { padding: 10px 14px; border-radius: var(--radius); background: var(--danger-bg); color: var(--danger); font-size: 0.85rem; }
+
+.tour-block { position: fixed; inset: 0; z-index: 100; }
+
+.tour-dim { position: fixed; inset: 0; z-index: 101; background: rgba(3, 16, 43, 0.6); }
+
+.tour-spot {
+  position: fixed; z-index: 101; border-radius: 10px; pointer-events: none;
+  box-shadow: 0 0 0 9999px rgba(3, 16, 43, 0.6), 0 0 0 2px var(--accent);
+  transition: all 0.2s ease;
+}
+
+.tour-card {
+  position: fixed; z-index: 102; width: 320px; padding: 16px;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border-strong); border-radius: var(--radius);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+}
+
+.welcome-wrap { position: fixed; inset: 0; z-index: 102; display: grid; place-items: center; pointer-events: none; }
+
+.tour-card.welcome { position: static; width: 540px; pointer-events: auto; }
+
+.welcome-fields { display: grid; gap: 14px; margin-top: 14px; }
+
+.welcome-fields .seg { flex-wrap: wrap; }
+
+.tour-card h3 { margin: 4px 0 6px; }
+
+.tour-card p { font-size: 0.9rem; line-height: 1.45; }
+
+.tour-count { font-size: 0.72rem; color: var(--text-muted); }
+
+.tour-actions { display: flex; gap: 8px; margin-top: 14px; align-items: center; }
+
+.tour-actions .spacer { flex: 1; }
+
+.seg {
+  display: inline-flex; align-self: flex-start; padding: 3px; gap: 2px;
+  background: var(--bg); border: 1px solid var(--border-strong); border-radius: 10px;
+}
+
+.seg button {
+  background: none; border: 0; border-radius: 7px; padding: 6px 14px;
+  font: 600 0.85rem var(--font-body); color: var(--text-muted); cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.seg-sm button { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; font-size: 0.78rem; }
+
+.seg button:hover { color: var(--text); }
+
+.seg button.on { background: var(--accent); color: var(--on-accent); }
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  min-width: 0;
+}
+
+.field .hint { font-weight: 400; }
+
+.field.narrow { max-width: 160px; }
+
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); flex: none; }
+
+.dot-current { background: var(--success); }
+
+.dot-behind { background: var(--warn); }
+
+.dot-security { background: var(--danger); border-radius: 1px; transform: rotate(45deg) scale(0.9); }
+
+ /* shape as well as colour */
+.dot-behind { border-radius: 2px; }
+
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--on-accent);
+  border: 1px solid var(--accent);
+  padding: 8px 18px;
+  border-radius: var(--radius);
+  font: 700 0.85rem var(--font-body);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  margin-left: auto;
+}
+
+.btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+
+.btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.btn-sm {
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  font: 600 0.75rem var(--font-body);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.btn-sm:hover { background: var(--hover); border-color: var(--text); }
+
+.btn-sm:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.hint {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tour-spot, .seg button { transition: none; }
+}

@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"drupal-updater/config"
+
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -28,12 +30,11 @@ func loadWindowSize() (int, int) {
 	return s.Width, s.Height
 }
 
-// saveWindowSize runs from OnBeforeClose; it never blocks closing.
-func saveWindowSize(ctx context.Context) bool {
+// saveWindowSize stores the size on close; failures are ignored (it is only a convenience).
+func saveWindowSize(ctx context.Context) {
 	w, h := runtime.WindowGetSize(ctx)
 	if b, err := json.Marshal(windowSize{w, h}); err == nil {
 		_ = os.MkdirAll(filepath.Dir(windowFile()), 0o755)
-		_ = os.WriteFile(windowFile(), b, 0o644)
+		_ = config.WriteFileAtomic(windowFile(), b, 0o644)
 	}
-	return false
 }

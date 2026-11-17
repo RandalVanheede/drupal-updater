@@ -262,7 +262,11 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 		logging.Error("[%s] %s", name, msg)
 		tmux("kill-session", "-t", "="+session)
 		if tempBranch != "" {
-			Cleanup(path, startBranch, tempBranch) // best-effort
+			if kept, err := CleanupKeepWork(path, startBranch, tempBranch); err != nil {
+				logging.Error("[%s] cleanup: %v", name, err)
+			} else if kept != "" {
+				msg += "\nThe work done so far is kept on branch " + kept
+			}
 		}
 		send("failed", "Claude session", msg)
 	}

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -114,5 +115,56 @@ func TestSaveProjectFileKeepsTeamSettings(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, ProjectFile), []byte("git_start_branch: [broken"), 0o644)
 	if SaveProjectFile(dir, ProjectConfig{GitStartBranch: "x"}) == nil {
 		t.Fatal("overwrote a file that does not parse")
+	}
+}
+
+func TestWriteFileAtomicAndBackup(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.yaml")
+	if err := WriteFileAtomic(p, []byte("one"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteFileAtomic(p, []byte("two"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != "two" {
+		t.Fatalf("got %q", b)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Fatalf("temp files left behind: %v", entries)
+	}
+	bad, err := BackupBadConfig(p)
+	if err != nil || !strings.HasPrefix(bad, p+".bad-") {
+		t.Fatalf("backup: %q %v", bad, err)
+	}
+	if b, _ := os.ReadFile(bad); string(b) != "two" {
+		t.Fatal("backup lost the content")
+	}
+	if _, err := os.Stat(p); !os.IsNotExist(err) {
+		t.Fatal("original should be moved away")
+	}
+	if _, err := BackupBadConfig(p); err == nil {
+		t.Fatal("missing file must error")
+	}
+}
+
+func TestDashboardProjectComesFromTheRepoFile(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &Config{Projects: map[string]ProjectConfig{"site": {DashboardProject: "Local Name"}}}
+	if got := ForProject(cfg.Project("site"), dir).DashboardProject; got != "Local Name" {
+		t.Fatalf("local override: %q", got)
+	}
+	if err := SaveProjectFile(dir, ProjectConfig{DashboardProject: "Shared Name"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := ForProject(cfg.Project("site"), dir).DashboardProject; got != "Shared Name" {
+		t.Fatalf("the repo's drupal-updater.yaml must win: %q", got)
+	}
+	// saving another field later keeps the mapping that is already in the file
+	if err := SaveProjectFile(dir, ProjectConfig{GitStartBranch: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := ForProject(ProjectConfig{}, dir); got.DashboardProject != "Shared Name" || got.GitStartBranch != "main" {
+		t.Fatalf("merge lost a field: %+v", got)
 	}
 }

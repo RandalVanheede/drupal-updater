@@ -13,6 +13,16 @@ export function CleanupBranch(arg1:string):Promise<void>;
 
 export function CoreStatuses(arg1:Array<string>):Promise<Record<string, coreupdates.Result>>;
 
+export function DashboardCandidates():Promise<main.DashCandidates>;
+
+export function DashboardInfo(arg1:boolean):Promise<Record<string, main.DashInfo>>;
+
+export function DashboardSignIn():Promise<void>;
+
+export function DashboardSignOut():Promise<void>;
+
+export function DashboardState():Promise<main.DashboardState>;
+
 export function DiscoverProjects():Promise<Array<main.ProjectInfo>>;
 
 export function FinalBranch(arg1:string):Promise<string>;
@@ -20,6 +30,8 @@ export function FinalBranch(arg1:string):Promise<string>;
 export function GetClaudeDefaults():Promise<Record<string, any>>;
 
 export function GetConfig():Promise<config.Config>;
+
+export function GetConfigError():Promise<string>;
 
 export function GetUpdate():Promise<updater.Release>;
 
@@ -29,7 +41,11 @@ export function InstallUpdate():Promise<void>;
 
 export function MergeRequest(arg1:string,arg2:string):Promise<void>;
 
-export function RefreshCore(arg1:string,arg2:boolean):Promise<string>;
+export function PickFolder():Promise<string>;
+
+export function PreviewProjects(arg1:Array<string>,arg2:Array<string>,arg3:Array<string>,arg4:number):Promise<number>;
+
+export function RefreshCore(arg1:string,arg2:boolean):Promise<coreupdates.Refresh>;
 
 export function RefreshReleases():Promise<void>;
 

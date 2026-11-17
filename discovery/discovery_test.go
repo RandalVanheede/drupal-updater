@@ -116,3 +116,17 @@ func TestCoreVersion(t *testing.T) {
 		t.Fatalf("v prefix: got %q", v)
 	}
 }
+
+func TestCoreVersionFromLock(t *testing.T) {
+	cases := map[string]string{
+		`{"packages":[{"name":"drupal/cms","version":"1.2.0"}]}`:                                           "1.2.0",
+		`{"packages":[{"name":"drupal/cms","version":"1.2.0"},{"name":"drupal/core","version":"11.2.4"}]}`: "11.2.4", // core wins
+		`{"packages":[]}`: "",
+		`not json`:        "",
+	}
+	for in, want := range cases {
+		if got := CoreVersionFromLock([]byte(in)); got != want {
+			t.Errorf("%s: got %q want %q", in, got, want)
+		}
+	}
+}

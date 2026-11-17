@@ -142,7 +142,13 @@ func Find(projects []Project, name string) (Project, bool) {
 // CoreVersion returns the installed Drupal core version from the project's composer.lock
 // ("11.1.2"), or "" when there is no lock file or no core in it.
 func CoreVersion(dir string) string {
-	data, err := os.ReadFile(filepath.Join(dir, "composer.lock"))
+	path := filepath.Join(dir, "composer.lock")
+	// a regular file of sane size only: the working tree can be written from containers, and a FIFO or /dev/zero behind
+	// that name would hang the scan
+	if fi, err := os.Lstat(path); err != nil || !fi.Mode().IsRegular() || fi.Size() > 16<<20 {
+		return ""
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""
 	}
