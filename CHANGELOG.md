@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [1.0.11] - 2026-11-17
+### Changed
+- Desktop app: a finished project can be confirmed (branch rename or cleanup), retried, turned into a merge request and dismissed right away, without waiting for the other projects. Starting more projects no longer drops finished rows that are still waiting for confirmation. The separate confirm screen is gone; each row has its own buttons, plus "Confirm all finished" for the bulk case.
+
 ## [1.0.10] - 2026-11-17
 ### Changed
 - `git_start_branch` accepts a `|`-separated list; the first branch that exists locally wins. The default is now `master|main`. Merge requests are refused from any listed branch.
