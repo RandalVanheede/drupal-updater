@@ -6,6 +6,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-17
+### Added
+- Desktop app: each project shows its installed Drupal core version (from `composer.lock`) with a status dot: green is the newest release, orange is behind without a security update, red needs a security update. The status comes from Drupal's release history (updates.drupal.org, cached for an hour; offline simply shows no dots).
+- Desktop app: filter the project list by update status (all, up to date, behind, security), next to the text filter. "Toggle All" now only toggles the projects the filters show.
+- Desktop app: Standard/Disaster mode is a toggle switch.
+
+### Changed
+- Desktop app: Settings uses vertical tabs (Appearance last), card sections and segmented controls, with the Save bar pinned to the bottom. The tour opens the advanced Claude settings.
+- Desktop app: project rows use fixed columns, and a long path is cut at the front instead of wrapping.
+
 ## [1.1.0] - 2026-11-17
 ### Added
 - Desktop app: Settings → Appearance with theme (follow system, light, dark), font (Atkinson Hyperlegible, JetBrains Mono, Space Grotesk) and font size. They apply immediately and are stored per machine.
