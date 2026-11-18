@@ -6,6 +6,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-11-18
+### Added
+- Projects on github.com get a pull request through `gh` (`gh auth login`) instead of a GitLab merge request through `glab`; the pull request always goes to the `origin` repository the branch was pushed to.
+- Settings: "Show placeholders" opens an explanation of every prompt placeholder; "How the smoke test works" (project overrides) explains the checks and how to add pages and flows.
+
+### Changed
+- Claude's summary has one line per package group, core first with the advisories it fixes, and no "none" lines.
+- The result card can be folded; after a run the last Claude screen is folded like the full log.
+- A failed merge request message can be clicked to show it in full; when glab does not know the origin's GitLab server, the message says which `glab auth login --hostname` to run.
+
+### Security
+- Frontend build dependencies updated (`npm audit fix`: devalue, nanoid).
+
 ## [1.4.0] - 2026-11-18
 ### Changed
 - Updates run in three parts. The app does the fixed steps itself (checkout, pull, temp branch, `ddev start`, `composer install`, `drush deploy`), lists what there is to update (`composer audit` in disaster mode, `composer outdated --minor-only` in standard mode) and gives that list to Claude. A step that fails is handed to Claude with its output instead of failing the run. Afterwards the app runs `drush updb` and `cex`, checks that no database updates or config changes are pending, smoke-tests the site against a baseline it took before the update and looks for new errors in the Drupal log; problems go to a repair session (at most two) and fail the run if they remain.
