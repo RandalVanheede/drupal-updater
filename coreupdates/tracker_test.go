@@ -84,3 +84,9 @@ func TestTrackerRefreshReadsOrigin(t *testing.T) {
 		t.Fatalf("a failed fetch should not be retried or forgotten: %+v", r)
 	}
 }
+
+// the fetch only accepts https/ssh remotes in production; the tests use local repositories
+func TestMain(m *testing.M) {
+	os.Setenv("DU_ALLOW_LOCAL_REMOTES", "1")
+	os.Exit(m.Run())
+}

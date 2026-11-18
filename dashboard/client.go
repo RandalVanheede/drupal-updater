@@ -166,7 +166,8 @@ func (c *Client) SignOut(ctx context.Context) error {
 	c.tokens, c.session = nil, ""
 	err := c.store.Clear() // under the lock: a concurrent call must not load the old tokens back
 	c.mu.Unlock()
-	if t != nil && t.RefreshToken != "" && m != nil && m.Revoke != "" {
+	// only a token of this server goes to this server's revocation endpoint: one stored for another address is just forgotten
+	if t != nil && t.Server == c.server && t.RefreshToken != "" && m != nil && m.Revoke != "" {
 		form := url.Values{"token": {t.RefreshToken}, "client_id": {t.ClientID}}
 		if req, rerr := http.NewRequestWithContext(ctx, http.MethodPost, m.Revoke, strings.NewReader(form.Encode())); rerr == nil {
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")

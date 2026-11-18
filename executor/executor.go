@@ -34,7 +34,9 @@ func EnrichedEnv() []string {
 		os.Getenv("HOME") + "/.local/bin",
 	}
 	// Never let a tool wait on a prompt nobody can answer.
-	env := append(os.Environ(), "COMPOSER_NO_INTERACTION=1", "GIT_TERMINAL_PROMPT=0", "DDEV_NONINTERACTIVE=true")
+	// GIT_NO_LAZY_FETCH: a partial-clone "promisor" remote in a project's .git/config (writable from the ddev containers)
+	// would otherwise make git run a program, or reach a server, whenever it reads an object that is missing.
+	env := append(os.Environ(), "COMPOSER_NO_INTERACTION=1", "GIT_TERMINAL_PROMPT=0", "DDEV_NONINTERACTIVE=true", "GIT_NO_LAZY_FETCH=1")
 
 	hasSSHAuth := false
 	for i, e := range env {

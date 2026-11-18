@@ -358,3 +358,26 @@ func TestRef(t *testing.T) {
 		t.Fatalf("refs: %q %q", Ref(ps[0], ps), Ref(ps[1], ps))
 	}
 }
+
+func TestSignOutOnlyRevokesAtTheTokensOwnServer(t *testing.T) {
+	f := newFake(t)
+	revoked := 0
+	f.Config.Handler.(*http.ServeMux).HandleFunc("/oauth/revoke-spy", func(w http.ResponseWriter, r *http.Request) { revoked++ })
+	c := newClient(t, f)
+	ctx := context.Background()
+	c.mu.Lock()
+	c.meta, _ = c.discoverLocked(ctx)
+	c.meta.Revoke = f.URL + "/oauth/revoke-spy"
+	c.mu.Unlock()
+	// tokens that were stored for another address must not be sent to this server
+	c.store.Save(&Tokens{Server: "https://other.example", ClientID: "x", AccessToken: "a", RefreshToken: "secret-refresh"})
+	if err := c.SignOut(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if revoked != 0 {
+		t.Fatal("a refresh token of another server was sent here")
+	}
+	if tk, _ := c.store.Load(); tk != nil {
+		t.Fatal("the stored tokens should still be forgotten")
+	}
+}
