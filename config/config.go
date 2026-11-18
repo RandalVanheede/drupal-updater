@@ -23,7 +23,7 @@ type ProjectConfig struct {
 	GitStartBranch      string   `yaml:"git_start_branch,omitempty" json:"GitStartBranch"`
 	GitNewBranchPattern string   `yaml:"git_new_branch_pattern,omitempty" json:"GitNewBranchPattern"`
 	IgnoredPackages     []string `yaml:"ignored_packages,omitempty" json:"IgnoredPackages"`
-	SmokePaths          []string `yaml:"smoke_paths,omitempty" json:"SmokePaths"`                 // extra paths the agent checks before/after updating; "admin:" prefix = logged in
+	SmokePaths          []string `yaml:"smoke_paths,omitempty" json:"SmokePaths"`                 // extra paths the app's smoke test checks before/after updating; "admin:" prefix = logged in
 	ClaudeInstructions  string   `yaml:"claude_instructions,omitempty" json:"ClaudeInstructions"` // extra per-project prompt text
 	GitMergeTarget      string   `yaml:"git_merge_target,omitempty" json:"GitMergeTarget"`        // merge request target; default: the start branch
 	GitCommitMessage    string   `yaml:"git_commit_message,omitempty" json:"GitCommitMessage"`    // commit made before the merge request; {date} = YYYY-MM-DD

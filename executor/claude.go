@@ -63,7 +63,7 @@ Rules (enforced; refused commands explain what to do instead):
 
 Finish by writing the file {{result_file}} containing JSON only:
 {"status": "success" | "failed", "summary": "<see below>"}
-The summary is read by a person: short lines separated by \n, each starting with "- ", one fact per line, no paragraphs. On success: the core version change; each updated package as "name old -> new" (related packages on one line, e.g. "drupal/core* 11.4.8 -> 11.4.10"); each skipped update or advisory with its reason; what you fixed along the way; what a person must still do. On failure the first line says what failed, then what you tried and what is needed.
+The summary is read by a person: short lines separated by \n, each starting with "- ", one fact per line, no paragraphs. On success: each updated package as "name old -> new", related packages on one line, core first with the advisories it fixes (e.g. "drupal/core* 11.4.8 -> 11.4.10 (fixes SA-CORE-2026-014)"); each skipped update or advisory with its reason; what you fixed along the way; and only if there is any, what a person must still do. Leave out lines that would say "none" or "nothing". On failure the first line says what failed, then what you tried and what is needed.
 Stay on branch {{temp_branch}} when you write it, also on failure: the app cleans up.`
 
 // repairPrompt is used when the app's checks after an update found problems.

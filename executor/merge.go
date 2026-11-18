@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
+	"os"
 	"os/exec"
 	"regexp"
 	"slices"
@@ -33,9 +35,15 @@ Update summary:
 Finish by writing the file {{result_file}} containing JSON only:
 {"status": "success" | "failed", "summary": "<how each conflict was resolved and what you checked; or what failed and why>"}`
 
-var glabBin = "glab" // tests point this at a fake
+var glabBin, ghBin = "glab", "gh" // tests point these at fakes
 
-var mrURL = regexp.MustCompile(`https://\S+/merge_requests/\d+`)
+var (
+	ghSlug   = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+	ghPRURL  = regexp.MustCompile(`^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+$`)
+	hostName = regexp.MustCompile(`^[A-Za-z0-9.-]+$`)
+)
+
+var mrURL = regexp.MustCompile(`https://\S+/(merge_requests|pull)/\d+`)
 
 // MergeRequest commits a renamed update branch's leftover changes, pushes it and opens a GitLab merge request
 // into the project's merge target (default: its start branch) with glab, which picks the GitLab host from the
@@ -56,8 +64,23 @@ func MergeRequest(ctx context.Context, name, path, branch string, pc config.Proj
 	if _, err := git(path, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch); err != nil {
 		return "", fmt.Errorf("branch %q does not exist locally", branch)
 	}
-	glab := lookEnriched(glabBin)
-	if _, err := exec.LookPath(glab); err != nil {
+	// GitHub remotes get a pull request through gh, everything else a GitLab merge request through glab.
+	// shortcut: only github.com counts as GitHub; GitHub Enterprise hosts would need GH_HOST.
+	origin, _ := git(path, "remote", "get-url", "--push", "origin") // where the branch is pushed, so the PR matches it
+	origin = strings.TrimSpace(origin)
+	github := remoteHost(origin) == "github.com"
+	slug := repoSlug(origin)
+	if github && (!ghSlug.MatchString(slug) || strings.HasPrefix(slug, ".") || strings.Contains(slug, "..")) {
+		return "", fmt.Errorf("origin %q is not a github.com owner/repo URL", origin)
+	}
+	tool := lookEnriched(glabBin)
+	if github {
+		tool = lookEnriched(ghBin)
+	}
+	if _, err := exec.LookPath(tool); err != nil {
+		if github {
+			return "", errors.New("gh not found: this project is on GitHub; install it (brew install gh) and run gh auth login")
+		}
 		return "", errors.New("glab not found: install it (brew install glab) and run glab auth login for each GitLab host")
 	}
 	run := func(args ...string) (string, error) {
@@ -120,20 +143,65 @@ func MergeRequest(ctx context.Context, name, path, branch string, pc config.Proj
 	if _, err := run("push", "-u", "origin", branch); err != nil {
 		return "", err
 	}
-	progress("glab mr create → " + target)
-	cmd := exec.CommandContext(ctx, glab, "mr", "create", "--source-branch", branch, "--target-branch", target,
-		"--title", msg, "--description", mrDescription(summary), "--yes")
-	cmd.Dir = path
-	cmd.Env = append(EnrichedEnv(), "GLAB_NO_PROMPT=1")
+	var cmd *exec.Cmd
+	if github {
+		progress("gh pr create → " + target)
+		// --repo pins origin: on its own gh prefers an "upstream" remote, which would open the PR on someone else's repo
+		// the host is pinned too, so gh never talks to another server; it runs outside the repo, whose git config it
+		// would otherwise read through its own git calls
+		cmd = exec.CommandContext(ctx, tool, "pr", "create", "--repo", "github.com/"+slug, "--head", branch, "--base", target,
+			"--title", msg, "--body", mrDescription(summary))
+		cmd.Env = append(EnrichedEnv(), "GH_PROMPT_DISABLED=1")
+		cmd.Dir = os.TempDir()
+	} else {
+		progress("glab mr create → " + target)
+		cmd = exec.CommandContext(ctx, tool, "mr", "create", "--source-branch", branch, "--target-branch", target,
+			"--title", msg, "--description", mrDescription(summary), "--yes")
+		cmd.Env = append(EnrichedEnv(), "GLAB_NO_PROMPT=1")
+		cmd.Dir = path
+	}
 	out, err := cmd.CombinedOutput()
-	if url := mrURL.FindString(string(out)); url != "" { // glab also prints the URL of an existing MR for this branch
+	if url := mrURL.FindString(string(out)); url != "" && (!github || ghPRURL.MatchString(url)) { // glab also prints the URL of an existing MR for this branch
 		logging.Info("[%s] merge request: %s", name, url)
 		return url, nil
 	}
 	if err != nil {
+		if github {
+			return "", fmt.Errorf("gh pr create failed: %v\n%s", err, out)
+		}
+		if strings.Contains(string(out), "none of the git remotes") {
+			host := remoteHost(origin)
+			if !hostName.MatchString(host) {
+				host = "<the origin's server>" // never put text from the repo's config into a command to copy
+			}
+			return "", fmt.Errorf("glab is not logged in to %s, the server of this project's origin. Run `glab auth login --hostname %s` in a terminal, then Retry MR (a remote that is not GitLab cannot get a merge request).\n\nglab said: %s", host, host, strings.TrimSpace(string(out)))
+		}
 		return "", fmt.Errorf("glab mr create failed: %v\n%s", err, out)
 	}
 	return "", fmt.Errorf("glab gave no merge request URL:\n%s", out)
+}
+
+// repoSlug is the owner/repo part of a remote URL.
+func repoSlug(remote string) string {
+	p := remote
+	if u, err := url.Parse(remote); err == nil && u.Host != "" {
+		p = u.Path
+	} else if _, after, ok := strings.Cut(remote, ":"); ok {
+		p = after
+	}
+	return strings.TrimSuffix(strings.Trim(p, "/"), ".git")
+}
+
+// remoteHost is the host of an https, ssh:// or scp-style (git@host:group/repo) remote URL.
+func remoteHost(remote string) string {
+	if u, err := url.Parse(remote); err == nil && u.Host != "" {
+		return u.Hostname()
+	}
+	if at := strings.Index(remote, "@"); at >= 0 {
+		remote = remote[at+1:]
+	}
+	host, _, _ := strings.Cut(remote, ":")
+	return host
 }
 
 // resolveConflicts merges origin/target into branch without committing, lets Claude resolve it, then commits.

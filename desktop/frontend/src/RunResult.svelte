@@ -7,8 +7,8 @@
   const blocks = $derived(parseResult(text));
 </script>
 
-<div class="result result-{status}">
-  <h3>{TITLE[status] || status}</h3>
+<details class="result result-{status}" open>
+  <summary><h3>{TITLE[status] || status}</h3></summary>
   {#each blocks as b}
     {#if b.heading}<h4>{b.heading}</h4>{/if}
     {#if b.table}
@@ -23,7 +23,7 @@
       {#if it.bullet}<p class="li">{it.text}</p>{:else}<p>{it.text}</p>{/if}
     {/each}
   {/each}
-</div>
+</details>
 
 <style>
   .result {
@@ -39,7 +39,9 @@
   }
   .result-failed { border-left-color: var(--danger); }
   .result-success { border-left-color: var(--success); }
-  h3 { margin: 0 0 6px; font-size: var(--fs1); }
+  summary { cursor: pointer; }
+  h3 { display: inline; font-size: var(--fs1); }
+  details[open] > summary { margin-bottom: 6px; }
   h4 { margin: 12px 0 4px; font-size: var(--fs0); color: var(--text-muted); }
   p { margin: 2px 0; overflow-wrap: anywhere; }
   .li { padding-left: 1.1em; text-indent: -0.8em; }

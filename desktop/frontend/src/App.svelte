@@ -9,6 +9,7 @@
   import Slider from './Slider.svelte';
   import DashPopover from './DashPopover.svelte';
   import RunResult from './RunResult.svelte';
+  import Explain from './Explain.svelte';
   import { FONTS, THEMES, SIZES, FONT_ITEMS, load } from './appearance.js';
   import { segKeys } from './keys.js';
 
@@ -81,7 +82,8 @@
 
   let statuses = $state({});
   let logs = $state({});
-  let results = $state({}); // the final report of each run, shown above the log
+  let results = $state({});
+  let mergeOpen = $state({}); // failed merge request messages shown in full // the final report of each run, shown above the log
   let screens = $state({}); // live Claude terminal per project
   let notStarted = $state({}); // projects that failed before running (discovery), so confirm must not clean up their branch
   let detailProject = $state('');
@@ -758,7 +760,25 @@
             </label>
             <label class="field">
               Prompt
-              <span class="hint">Placeholders: {'{{project}} {{path}} {{start_branch}} {{temp_branch}} {{ignored_packages}} {{smoke_paths}} {{project_instructions}} {{updates}} {{result_file}}'}</span>
+              <span class="hint">
+                <Explain label="Show placeholders" title="Prompt placeholders">
+                  <p>The app replaces these in the prompt before Claude starts.</p>
+                  <dl>
+                  <dt>{'{{setup}}'}</dt><dd>What the app already did before Claude starts (checkout, fetch, temp branch, ddev start, composer install, drush deploy), plus the output of the first step that failed, which Claude then finishes itself.</dd>
+                  <dt>{'{{update_list}}'}</dt><dd>What there is to update, as found by the app: the open security advisories (disaster mode) or the minor and patch updates (standard mode). Required: a prompt without it is replaced by the built-in one.</dd>
+                  <dt>{'{{updates}}'}</dt><dd>The update rules of the current update mode (disaster: security fixes only; standard: minor and patch updates, core first).</dd>
+                  <dt>{'{{previous_failure}}'}</dt><dd>Why the previous run of this project failed, so it is not repeated; empty when the last run did not fail.</dd>
+                  <dt>{'{{project}}'}</dt><dd>The project's folder name.</dd>
+                  <dt>{'{{path}}'}</dt><dd>The project folder; Claude's working directory.</dd>
+                  <dt>{'{{start_branch}}'}</dt><dd>The branch the update starts from.</dd>
+                  <dt>{'{{temp_branch}}'}</dt><dd>The branch the update is made on; renamed to the final branch when you confirm.</dd>
+                  <dt>{'{{ignored_packages}}'}</dt><dd>Packages that must not be updated (project overrides), or "none".</dd>
+                  <dt>{'{{project_instructions}}'}</dt><dd>The project's extra Claude instructions (project overrides), or nothing.</dd>
+                  <dt>{'{{smoke_paths}}'}</dt><dd>The project's extra smoke-test paths, or "none". The app tests them itself; only useful if Claude should look at them too.</dd>
+                  <dt>{'{{result_file}}'}</dt><dd>Where Claude writes its result (status and summary). Keep this in the prompt.</dd>
+                  </dl>
+                </Explain>
+              </span>
               <textarea autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" rows="14" bind:value={config.ClaudePrompt}></textarea>
             </label>
             <div><button class="btn-sm" onclick={() => config.ClaudePrompt = claudeDefaults.prompt}>Reset prompt to default</button></div>
@@ -811,7 +831,22 @@
                       <ListEditor label="Ignored packages for {name}" items={config.Projects[name].IgnoredPackages} onchange={v => config.Projects[name].IgnoredPackages = v} placeholder="drupal/some_module" emptyText="None" />
                     </div>
                     <div class="edit-field">
-                      <span>Extra smoke-test paths <span class="hint">prefix <code>admin:</code> for logged-in pages</span></span>
+                      <span>Extra smoke-test paths <span class="hint">prefix <code>admin:</code> for logged-in pages · <Explain label="How the smoke test works" title="The smoke test">
+                        <p>The app tests the site itself, once before Claude starts (the baseline) and once after the update, over ddev's local http URL. It checks:</p>
+                        <ul>
+                          <li>Drupal boots (<code>drush status</code>) and <code>drush cr</code> works</li>
+                          <li>anonymous pages: <code>/</code>, <code>/user/login</code>, the newest published node of each content type, and that an unknown page gives a 404</li>
+                          <li>admin pages, logged in through <code>drush uli</code>: content, structure, configuration, the status report and the add form of each content type</li>
+                          <li>no new Error-level entries in the Drupal log</li>
+                        </ul>
+                        <p>A page fails when it does not answer as expected or shows a PHP or Drupal error. Only checks that passed before and fail after count; those go to a repair session. Checks that already failed before the update are reported, not fixed.</p>
+                        <p><strong>Adding checks</strong></p>
+                        <ul>
+                          <li><strong>Pages:</strong> add paths here, e.g. <code>/nl/contact</code>. Prefix <code>admin:</code> to check a page while logged in, e.g. <code>admin:/admin/structure/webform</code>.</li>
+                          <li><strong>Flows</strong> (submitting a form, a checkout, a search): describe them in the testing or smoke test section of the project's <code>AGENTS.md</code> (or <code>CLAUDE.md</code>). Claude carries them out after updating and fixes what broke.</li>
+                          <li><strong>Anything else</strong> for one project: the extra Claude instructions in these overrides.</li>
+                        </ul>
+                      </Explain></span></span>
                       <ListEditor label="Smoke-test paths for {name}" items={config.Projects[name].SmokePaths} onchange={v => config.Projects[name].SmokePaths = v} placeholder="/contact" emptyText="None" />
                     </div>
                     <label>
@@ -885,7 +920,7 @@
                     <span class="merge-msg" title={merges[name].message}>{merges[name].message}</span>
                     <button class="btn-sm btn-danger" onclick={() => CancelProject(name)}>Cancel</button>
                   {:else}
-                    {#if merges[name]?.state === 'failed'}<span class="merge-msg merge-failed" title={merges[name].message}>✗ {merges[name].message}</span>{/if}
+                    {#if merges[name]?.state === 'failed'}<button type="button" class="merge-msg merge-failed" class:open={mergeOpen[name]} aria-expanded={!!mergeOpen[name]} title={mergeOpen[name] ? 'Click to fold' : 'Click to show the whole message'} onclick={() => mergeOpen[name] = !mergeOpen[name]}>✗ {merges[name].message}</button>{/if}
                     <button class="btn-sm" onclick={() => openMergeRequest(name)}>{merges[name] ? 'Retry MR' : 'Create MR'}</button>
                   {/if}
                 {/if}
@@ -943,7 +978,12 @@
       {:else}
         <pre class="log-output">{logs[detailProject] || 'Waiting...'}</pre>
       {/if}
-      {#if screens[detailProject]}
+      {#if screens[detailProject] && results[detailProject]}
+        <details class="full-log">
+          <summary>Claude session (last screen)</summary>
+          <pre class="log-output live-output">{screens[detailProject]}</pre>
+        </details>
+      {:else if screens[detailProject]}
         <h3 class="live-title">Claude session {statuses[detailProject] === 'running' ? '(live)' : '(last screen)'}</h3>
         <pre class="log-output live-output">{screens[detailProject]}</pre>
       {/if}
@@ -1385,6 +1425,7 @@
     align-items: center;
   }
 
+  .full-log + .full-log { margin-top: 10px; }
   .full-log summary { cursor: pointer; color: var(--text-muted); font-size: var(--fs0); margin-bottom: 6px; }
   .live-title { margin: 12px 0 6px; font-size: var(--fs0); color: var(--text-muted); }
   .live-output { font-size: var(--fs-1); white-space: pre; overflow-x: auto; }
@@ -1478,5 +1519,6 @@
     color: var(--text-muted);
   }
 
-  .merge-failed { color: var(--danger); }
+  .merge-failed { color: var(--danger); background: none; border: none; padding: 0; font: inherit; font-size: var(--fs-1); text-align: left; cursor: pointer; }
+  .merge-failed.open { white-space: pre-wrap; overflow-wrap: anywhere; flex-basis: 100%; order: 10; user-select: text; }
 </style>

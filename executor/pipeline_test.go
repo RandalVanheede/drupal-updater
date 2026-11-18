@@ -333,3 +333,35 @@ func TestUnreadableAuditIsNeverASkip(t *testing.T) {
 		t.Fatalf("an audit that cannot be read must go to Claude, got %s, sessions %v", got.Status, h.sessions)
 	}
 }
+
+func TestRemoteHost(t *testing.T) {
+	for in, want := range map[string]string{
+		"git@gitlab.example.com:group/site.git":        "gitlab.example.com",
+		"https://gitlab.example.com/group/site.git":    "gitlab.example.com",
+		"ssh://git@gitlab.example.com:2222/g/site.git": "gitlab.example.com",
+	} {
+		if got := remoteHost(in); got != want {
+			t.Errorf("remoteHost(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestRepoSlug(t *testing.T) {
+	for in, want := range map[string]string{
+		"git@github.com:assetkiwi/marketing-site.git":     "assetkiwi/marketing-site",
+		"https://github.com/assetkiwi/marketing-site.git": "assetkiwi/marketing-site",
+		"ssh://git@github.com/assetkiwi/marketing-site":   "assetkiwi/marketing-site",
+	} {
+		if got := repoSlug(in); got != want {
+			t.Errorf("repoSlug(%q) = %q, want %q", in, got, want)
+		}
+	}
+	for _, bad := range []string{repoSlug("https://github.com"), repoSlug("git@github.com:"), repoSlug("git@github.com:evil.example/o/r"), "../x", "-x"} {
+		if ghSlug.MatchString(bad) && !strings.HasPrefix(bad, ".") {
+			t.Errorf("slug %q should be refused", bad)
+		}
+	}
+	if !mrURL.MatchString("https://github.com/o/r/pull/12") {
+		t.Error("a GitHub pull request URL should be recognised")
+	}
+}

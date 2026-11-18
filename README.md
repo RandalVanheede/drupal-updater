@@ -100,9 +100,9 @@ After confirming, each renamed branch gets a "Create MR" button ("Create all MRs
 1. commits whatever the run left uncommitted (`git add -A`, message from `git_commit_message`),
 2. fetches `origin/<git_merge_target>` (default: the start branch) and dry-runs the merge,
 3. on a conflict, starts the merge without committing and hands it to a Claude session (same tmux setup as a run; it may run composer/drush but still cannot commit or push), then commits the merge; if Claude fails, `git merge --abort` puts the branch back,
-4. pushes the branch and runs `glab mr create` with the run summary as description, then shows an "Open MR" link.
+4. pushes the branch and runs `glab mr create` (GitLab) or `gh pr create` (an `origin` on github.com) with the run summary as description, then shows an "Open MR" link.
 
-Needs [glab](https://gitlab.com/gitlab-org/cli) logged in for every GitLab host (`glab auth login`, and `glab auth login --hostname gitlab.example.com` for self-hosted); glab picks the host from the project's `origin` remote. Git 2.38+ is required for the dry run.
+Needs [glab](https://gitlab.com/gitlab-org/cli) logged in for every GitLab host (`glab auth login`, and `glab auth login --hostname gitlab.example.com` for self-hosted); glab picks the host from the project's `origin` remote. Projects on github.com need [gh](https://cli.github.com) logged in instead (`gh auth login`); the pull request always goes to the `origin` repository. Git 2.38+ is required for the dry run.
 
 ## Auto-update
 
@@ -138,7 +138,7 @@ The project list shows each project's installed Drupal core version with a marke
 
 A run has three parts.
 
-1. **The app prepares**, in Go: checks out the start branch (stashing local changes), pulls, creates the temp branch, starts ddev (unless it already runs), `ddev composer install` and `ddev drush deploy -y`. It then lists what there is to do: `composer audit` in disaster mode, `composer outdated --minor-only` in standard mode. **Nothing to do means the project is skipped**: no Claude session, back on the start branch, status "Skipped". Otherwise it takes a baseline smoke test of the site.
+1. **The app prepares**, in Go: checks out the start branch, fetches origin and fast-forwards (local changes are set aside and put back), creates the temp branch, starts ddev (unless it already runs), `ddev composer install` and `ddev drush deploy -y`. It then lists what there is to do: `composer audit` in disaster mode, `composer outdated --minor-only` in standard mode. **Nothing to do means the project is skipped**: no Claude session, back on the start branch, status "Skipped". Otherwise it takes a baseline smoke test of the site.
 2. **Claude updates**, in a detached tmux session (`du-<project>`, `claude --model sonnet`), with that list in its prompt. A fixed step that failed is handed over too, with its output, so Claude finishes it first.
 3. **The app checks**, in Go: `ddev drush updb -y` and `cex -y`, no pending database updates or config changes, the same smoke test again, and new Error-level log entries. Problems go back to Claude in a repair session (at most two); if they remain, the run fails. An update that did not change `composer.lock` is reported as skipped. Finally ddev is stopped, unless it was running before.
 
