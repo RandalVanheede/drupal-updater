@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-11-17
+### Security
+- The automatic `git fetch` no longer reads the project's `.git/config` (writable from the ddev containers), which could make git run programs or steer the network (remote helpers, `remote.origin.vcs`, `core.gitProxy`, `uploadpack`, `core.alternateRefsCommand`, credential helpers, cookie files, proxies). It now runs in a scratch repository that only has your own system and global git configuration (so SSH settings and the macOS Keychain keep working), writes the objects into the project and copies the branch positions over with `update-ref`. Only https, ssh and scp-style origin URLs are fetched (including host aliases from `~/.ssh/config`); shallow clones keep working. Per-folder `includeIf "gitdir:…"` blocks in your git config no longer apply to this fetch.
+- Every git command the app runs now sets `GIT_NO_LAZY_FETCH=1`: a partial-clone "promisor" remote written into a project's `.git/config` could otherwise run a program whenever git read a missing object, including during the core-version check.
+- Signing out of the dashboard only sends a stored refresh token to the revocation endpoint of the server it was issued for.
+
 ## [1.3.0] - 2026-11-17
 ### Added
 - Desktop app: optional connection to the applications dashboard (MCP server). Sign in once through the browser (OAuth with PKCE, read-only); each matched project then shows its SLA with a detail card on hover (customer, account manager, PHP, last scan, end-of-life runtimes, every pending security module) and a link to its dashboard page. Filter the list by SLA. The address defaults to the Dynamate dashboard (`dashboard_url`); tokens live in `~/.config/drupal-updater/dashboard.json` (0600).
