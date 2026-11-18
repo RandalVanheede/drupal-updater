@@ -6,6 +6,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-18
+### Changed
+- Updates run in three parts. The app does the fixed steps itself (checkout, pull, temp branch, `ddev start`, `composer install`, `drush deploy`), lists what there is to update (`composer audit` in disaster mode, `composer outdated --minor-only` in standard mode) and gives that list to Claude. A step that fails is handed to Claude with its output instead of failing the run. Afterwards the app runs `drush updb` and `cex`, checks that no database updates or config changes are pending, smoke-tests the site against a baseline it took before the update and looks for new errors in the Drupal log; problems go to a repair session (at most two) and fail the run if they remain.
+- Projects with nothing to update are skipped without starting Claude (status "Skipped"); so is an update that left `composer.lock` unchanged.
+- Disaster mode is security-only: the core, Symfony and Twig update now belongs to standard mode.
+- The smoke test is run by the app over ddev's local http URL, including admin pages through a `drush uli` login; flows from a project's `AGENTS.md` are carried out by Claude after updating.
+- Desktop: the project list is grouped by urgency (security update, update available, up to date, not checked) with Select all per group and the version each project moves to; the folder path and the dashboard details are in a detail card behind the `i` button; "Has SLA" replaces the SLA selector; the button states how many projects will run. Settings without card borders, one type scale, sentence-case labels; the tour covers the new list and the dashboard.
+- At most one project per 2.5 GiB of Docker memory runs at a time, whatever `max_concurrent` says. ddev is only stopped afterwards when it was not running before.
+- A custom `claude_prompt` written for the old flow (without `{{update_list}}`) is dropped in favour of the built-in prompt; the old one is saved next to the config as `<config>.claude_prompt.bak`.
+- Readable results: a finished run opens with a card saying why it failed or what was done, in sections (update session, each repair session, what the app checked, the `composer.lock` changes as a table), with the full log folded below. Claude writes its summary as one fact per line.
+- The start branch is brought up to date with the same safe fetch as the core status (the project's own git config is not read) and a fast-forward-only merge, instead of `git pull`.
+
+### Fixed
+- Cancelling a run returns the project to its start branch like a failed run, keeping or stashing the work.
+- A session that stops on a usage or rate limit fails at once instead of after the full timeout; one that stays idle without a result for ten minutes fails too.
+- An update was failed after two pointless repair sessions when `drush updatedb:status` answered "No database updates required" (or `config:status` "No differences"): those messages were taken for pending updates.
+- In disaster mode, packages listed as not to be updated were still handed to Claude as advisories; an audit result that cannot be read no longer counts as "no advisories".
+- An earlier run's temp branch with commits is kept (renamed) instead of reset at the next start; git commands are no longer killed halfway when a run is cancelled; command output is capped at 1 MB; the smoke test only follows redirects within the site.
+- The summary of a successful run is kept on disk, so a merge request made after a restart gets the real description; the next attempt after a failure is told what went wrong.
+
 ## [1.3.1] - 2026-11-17
 ### Security
 - The automatic `git fetch` no longer reads the project's `.git/config` (writable from the ddev containers), which could make git run programs or steer the network (remote helpers, `remote.origin.vcs`, `core.gitProxy`, `uploadpack`, `core.alternateRefsCommand`, credential helpers, cookie files, proxies). It now runs in a scratch repository that only has your own system and global git configuration (so SSH settings and the macOS Keychain keep working), writes the objects into the project and copies the branch positions over with `update-ref`. Only https, ssh and scp-style origin URLs are fetched (including host aliases from `~/.ssh/config`); shallow clones keep working. Per-folder `includeIf "gitdir:…"` blocks in your git config no longer apply to this fetch.
