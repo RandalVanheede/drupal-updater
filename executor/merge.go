@@ -35,7 +35,7 @@ Finish by writing the file {{result_file}} containing JSON only:
 
 var glabBin = "glab" // tests point this at a fake
 
-var mrURL = regexp.MustCompile(`https?://\S+/merge_requests/\d+`)
+var mrURL = regexp.MustCompile(`https://\S+/merge_requests/\d+`)
 
 // MergeRequest commits a renamed update branch's leftover changes, pushes it and opens a GitLab merge request
 // into the project's merge target (default: its start branch) with glab, which picks the GitLab host from the
@@ -122,7 +122,7 @@ func MergeRequest(ctx context.Context, name, path, branch string, pc config.Proj
 	}
 	progress("glab mr create → " + target)
 	cmd := exec.CommandContext(ctx, glab, "mr", "create", "--source-branch", branch, "--target-branch", target,
-		"--title", msg, "--description", summary, "--yes")
+		"--title", msg, "--description", mrDescription(summary), "--yes")
 	cmd.Dir = path
 	cmd.Env = append(EnrichedEnv(), "GLAB_NO_PROMPT=1")
 	out, err := cmd.CombinedOutput()
@@ -153,7 +153,7 @@ func resolveConflicts(ctx context.Context, name, path, branch, target, summary s
 
 	ch := make(chan StatusUpdate, 100)
 	go func() {
-		runClaude(ctx, name, path, "", "", ch, conflictPrompt, "{{branch}}", branch, "{{target_branch}}", target, "{{summary}}", summary)
+		runClaude(ctx, name, path, ch, conflictPrompt, "{{branch}}", branch, "{{target_branch}}", target, "{{summary}}", summary)
 		close(ch)
 	}()
 	var last StatusUpdate
@@ -192,4 +192,16 @@ func resolveConflicts(ctx context.Context, name, path, branch, target, summary s
 	}
 	progress("conflicts resolved: " + last.Output)
 	return nil
+}
+
+// mrDescription keeps text that came from the update (Claude, composer, drush output) from acting on GitLab:
+// a line starting with "/" would be a quick action (label, assign, retarget) and @all would notify everyone.
+func mrDescription(summary string) string {
+	lines := strings.Split(summary, "\n")
+	for i, l := range lines {
+		if strings.HasPrefix(strings.TrimSpace(l), "/") {
+			lines[i] = "\u200b" + l // zero-width space: no longer read as a command
+		}
+	}
+	return strings.NewReplacer("@all", "@\u200ball", "@here", "@\u200bhere").Replace(strings.Join(lines, "\n"))
 }

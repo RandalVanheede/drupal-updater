@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -9,7 +10,10 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"drupal-updater/logging"
 )
 
 // loginShell returns the user's default shell, falling back to /bin/sh.
@@ -51,14 +55,22 @@ func EnrichedEnv() []string {
 
 	// If SSH_AUTH_SOCK is missing (common in macOS GUI apps), ask launchd; Linux desktop sessions already export it
 	if !hasSSHAuth && runtime.GOOS == "darwin" {
-		out, err := exec.Command("launchctl", "getenv", "SSH_AUTH_SOCK").Output()
-		if err == nil && len(out) > 0 {
-			env = append(env, "SSH_AUTH_SOCK="+strings.TrimSpace(string(out)))
+		if sock := launchdSSHAuthSock(); sock != "" {
+			env = append(env, "SSH_AUTH_SOCK="+sock)
 		}
 	}
 
 	return env
 }
+
+// launchdSSHAuthSock asks launchd once per process: EnrichedEnv runs several times a second while updates run.
+var launchdSSHAuthSock = sync.OnceValue(func() string {
+	out, err := exec.Command("launchctl", "getenv", "SSH_AUTH_SOCK").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+})
 
 const stashMsg = "drupal-updater-autostash"
 
@@ -157,6 +169,11 @@ func CleanupKeepWork(projectPath, startBranch, tempBranch string) (string, error
 	}
 	// Fully qualified refs (a tag named like the branch would make a short name ambiguous) and stdout only (git warnings
 	// go to stderr). Only a count that is provably zero allows deleting: when in doubt the work is kept.
+	// show-ref exits 1 only when the branch provably does not exist; any other failure falls through and keeps the work
+	var ee *exec.ExitError
+	if err := gitCmd(context.Background(), projectPath, EnrichedEnv(), "show-ref", "--verify", "--quiet", "refs/heads/"+tempBranch).Run(); errors.As(err, &ee) && ee.ExitCode() == 1 {
+		return "", Cleanup(projectPath, startBranch, "")
+	}
 	cmd := gitCmd(context.Background(), projectPath, EnrichedEnv(), "rev-list", "--count", "refs/heads/"+resolved+"..refs/heads/"+tempBranch, "--")
 	raw, err := cmd.Output()
 	if n, convErr := strconv.Atoi(strings.TrimSpace(string(raw))); err == nil && convErr == nil && n == 0 {
@@ -194,13 +211,42 @@ func Cleanup(projectPath, startBranch, tempBranch string) error {
 // StatusUpdate represents a status change for a project
 type StatusUpdate struct {
 	ProjectName string
-	Status      string // running, success, failed, cancelled
+	Status      string // running, success, failed, cancelled, skipped (nothing to update; the project is back on its start branch)
 	Command     string
 	Output      string
 	Screen      string // latest snapshot of the Claude session's terminal; replaces the previous one, not part of the log
 }
 
-// Run hands a project's update to a Claude session (see runClaude) and reports progress on outChan.
-func Run(ctx context.Context, projectName, projectPath, startBranch, tempBranch string, outChan chan<- StatusUpdate) {
-	runClaude(ctx, projectName, projectPath, startBranch, tempBranch, outChan, claudeCfg.prompt)
+// gibPerProject is roughly what one project's ddev containers plus composer need while updating.
+const gibPerProject = 2.5
+
+// ConcurrencyCap lowers n to what Docker's memory can hold (about 2.5 GiB per project), so a high
+// max_concurrent does not make every run crawl or get killed. Without docker info it returns n unchanged.
+func ConcurrencyCap(n int) int {
+	if n < 1 {
+		n = 3 // the config default
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second) // a hung Docker must not hold up a start
+	defer cancel()
+	out, err := exec.CommandContext(ctx, lookEnriched("docker"), "info", "--format", "{{.MemTotal}}").Output()
+	if err != nil {
+		return n
+	}
+	mem, err := strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
+	if err != nil || mem <= 0 {
+		return n
+	}
+	return capFor(n, mem)
+}
+
+func capFor(n int, memBytes float64) int {
+	limit := int(memBytes / (gibPerProject * (1 << 30)))
+	if limit < 1 {
+		limit = 1
+	}
+	if n > limit {
+		logging.Info("max_concurrent %d lowered to %d: Docker has %.1f GiB of memory", n, limit, memBytes/(1<<30))
+		return limit
+	}
+	return n
 }

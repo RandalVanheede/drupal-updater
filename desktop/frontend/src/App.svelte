@@ -8,6 +8,7 @@
   import ListEditor from './ListEditor.svelte';
   import Slider from './Slider.svelte';
   import DashPopover from './DashPopover.svelte';
+  import RunResult from './RunResult.svelte';
   import { FONTS, THEMES, SIZES, FONT_ITEMS, load } from './appearance.js';
   import { segKeys } from './keys.js';
 
@@ -80,6 +81,7 @@
 
   let statuses = $state({});
   let logs = $state({});
+  let results = $state({}); // the final report of each run, shown above the log
   let screens = $state({}); // live Claude terminal per project
   let notStarted = $state({}); // projects that failed before running (discovery), so confirm must not clean up their branch
   let detailProject = $state('');
@@ -90,17 +92,34 @@
   let isRunning = $state(false);
 
   let searchFilter = $state('');
-  let statusFilter = $state('all');
+  let slaOnly = $state(false); // "Has SLA": only projects the dashboard knows an SLA for
   // own keys only: project.core comes from composer.lock, so "constructor" must not hit Object.prototype
   const coreOf = (p) => (p.core && Object.hasOwn(coreStatus, p.core) ? coreStatus[p.core] : null);
-  const STATUS_FILTERS = [['all', 'All'], ['current', 'Up to date', undefined, 'current'], ['behind', 'Behind', undefined, 'behind'], ['security', 'Security', undefined, 'security']];
-  // projects passing both the text and the update-status filter (unknown status only shows under All)
+  // projects passing the text filter and the "Has SLA" switch
   const visible = $derived.by(() => {
     const q = searchFilter.toLowerCase();
-    return projects.filter(p => (!q || p.name.toLowerCase().includes(q)) &&
-      (statusFilter === 'all' || coreOf(p)?.status === statusFilter) &&
-      (slaFilter === 'all' || (slaFilter === '__none' ? !slaOf(p) : slaOf(p) === slaFilter)));
+    return projects.filter(p => (!q || p.name.toLowerCase().includes(q)) && (!slaOnly || dashInfo[p.name]?.sla));
   });
+  // the list is grouped by what needs doing; "Up to date" starts folded away
+  const STATUS_TEXT = { idle: 'Waiting', running: 'Running', success: 'Done', failed: 'Failed', cancelled: 'Cancelled', skipped: 'Skipped' };
+  const GROUPS = [
+    { key: 'security', label: 'Security update' },
+    { key: 'behind', label: 'Update available' },
+    { key: 'current', label: 'Up to date' },
+    { key: 'unknown', label: 'Not checked' },
+  ];
+  // a module security update outranks a current core: the site still needs a security update
+  const groupOf = (p) => {
+    const d = dashInfo[p.name];
+    if (d?.securityKnown && d.securityUpdates?.length) return 'security';
+    return coreOf(p)?.status || 'unknown';
+  };
+  const grouped = $derived(GROUPS.map(g => ({ ...g, items: visible.filter(p => groupOf(p) === g.key) })).filter(g => g.items.length));
+  let folded = $state({ current: true });
+  function toggleGroup(items) {
+    const all = items.every(p => selected[p.name]);
+    items.forEach(p => selected[p.name] = !all);
+  }
   const selectedCount = $derived(projects.filter(p => selected[p.name]).length);
   const hiddenSelected = $derived(selectedCount - visible.filter(p => selected[p.name]).length);
 
@@ -131,13 +150,17 @@
       const status = update.status || update.Status;
       statuses[name] = status;
       // Pre-fill the branch name from the project's pattern as soon as it succeeds (backend skips names already taken)
+      if (status === 'skipped') confirmResults[name] = '– nothing to update'; // no branch left behind, nothing to confirm
       if (status === 'success' && !branchNames[name]) {
         FinalBranch(name).then(b => { if (!branchNames[name]) branchNames[name] = b; }).catch(() => {});
       }
       const cmd = update.command || update.Command;
       if (cmd === 'discover') notStarted[name] = true; // never ran: no temp branch of this run to clean up
       const out = update.output || update.Output;
-      if (out) {
+      if (out && ['success', 'failed', 'skipped', 'cancelled'].includes(status)) {
+        results[name] = { status, text: out };
+        logs[name] += '→ ' + (STATUS_TEXT[status] || status) + '\n';
+      } else if (out) {
         logs[name] += cmd + '\n' + out + '\n';
       } else if (cmd) {
         logs[name] += '$ ' + cmd + '\n';
@@ -252,16 +275,7 @@
   }
   function closePop() { clearTimeout(popTimer); pop = null; }
 
-  // SLA filter: only offered once dashboard data is loaded
-  let slaFilter = $state('all');
-  const NO_SLA = '(no SLA)';
-  const slaOf = (p) => { const d = dashInfo[p.name]; return d ? (d.sla || NO_SLA) : null; };
-  const slaOptions = $derived.by(() => {
-    const counts = {};
-    for (const p of projects) { const k = slaOf(p); if (k) counts[k] = (counts[k] || 0) + 1; }
-    return Object.entries(counts).sort(([a], [b]) => a.localeCompare(b));
-  });
-  $effect(() => { if (slaFilter !== 'all' && Object.keys(dashInfo).length === 0) slaFilter = 'all'; });
+  $effect(() => { if (slaOnly && Object.keys(dashInfo).length === 0) slaOnly = false; });
 
   async function loadProjects() {
     loading = true; loadError = '';
@@ -314,12 +328,6 @@
     } finally { refreshing = false; }
   }
 
-  // acts on what the filters show, so hidden projects are never selected by accident
-  function toggleAll() {
-    const allSelected = visible.every(p => selected[p.name]);
-    visible.forEach(p => selected[p.name] = !allSelected);
-  }
-
   function doStart() {
     // running projects and ones with a merge request in flight are left alone; every other row keeps its state
     const active = n => statuses[n] === 'running' || statuses[n] === 'idle' || merges[n]?.state === 'working' || confirmResults[n] === '…';
@@ -368,7 +376,7 @@
     if (editingProject === name) editingProject = null;
   }
 
-  const finished = n => ['success', 'failed', 'cancelled'].includes(statuses[n]);
+  const finished = n => ['success', 'failed', 'cancelled', 'skipped'].includes(statuses[n]);
   const done = n => !!confirmResults[n] && !confirmResults[n].startsWith('✗'); // '…' = in flight
   const busy = $derived(Object.values(statuses).some(s => s === 'running' || s === 'idle'));
 
@@ -376,7 +384,7 @@
   function resetRow(name) {
     statuses[name] = 'idle';
     logs[name] = '';
-    for (const o of [screens, confirmResults, merges, branchNames, notStarted]) delete o[name];
+    for (const o of [results, screens, confirmResults, merges, branchNames, notStarted]) delete o[name];
   }
 
   // Rename the finished project's branch, or clean it up when it failed. Other projects are untouched.
@@ -444,7 +452,7 @@
 
   // Remove a handled project from the list; leave the running view when nothing is left.
   function dismiss(name) {
-    for (const o of [statuses, logs, screens, confirmResults, merges, branchNames, notStarted]) delete o[name];
+    for (const o of [statuses, logs, results, screens, confirmResults, merges, branchNames, notStarted]) delete o[name];
     if (Object.keys(statuses).length === 0) {
       isRunning = false;
       view = 'projects';
@@ -455,10 +463,11 @@
 {#if welcome}<Welcome bind:theme bind:font bind:fontSize ondone={finishWelcome} />{/if}
 <Tour bind:this={tour} go={goTo} bind:active={tourActive} />
 
-<svelte:window onpointerdown={(e) => { if (pop?.pinned && !e.target.closest?.('.pop, .sla')) closePop(); }} />
-{#if pop && dashInfo[pop.local]}
-  <DashPopover info={dashInfo[pop.local]} ours={projects.find(p => p.name === pop.local)?.core} rect={pop.rect} pinned={pop.pinned}
-    onenter={() => clearTimeout(popTimer)} onleave={schedulePopClose} onclose={closePop} onsave={() => pickDashboard(pop.local, dashInfo[pop.local].ref)} />
+<svelte:window onpointerdown={(e) => { if (pop?.pinned && !e.target.closest?.('.pop, .info')) closePop(); }} />
+{#if pop}
+  {@const pp = projects.find(p => p.name === pop.local)}
+  <DashPopover info={dashInfo[pop.local]} project={pp} status={pp ? coreOf(pp) : null} rect={pop.rect} pinned={pop.pinned}
+    onenter={() => clearTimeout(popTimer)} onleave={schedulePopClose} onclose={closePop} onsave={() => pickDashboard(pop.local, dashInfo[pop.local]?.ref)} />
 {/if}
 
 <main class:mac={isMac} inert={welcome || tourActive}>
@@ -492,50 +501,64 @@
 
   {#if view === 'projects'}
     <section class="panel">
-      <div class="panel-header">
+      <div class="panel-header" data-tour="filters">
         <h2 class="sr">Select projects to update</h2>
         <div class="search-box">
           <input type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" bind:value={searchFilter} placeholder="Filter projects..." class="search-input" />
         </div>
         {#if coreNote}<span class="hint core-note" title={coreNote}>⚠ {coreNote}</span>{/if}
-        <Seg small labelled={false} label="Filter by update status" items={STATUS_FILTERS} value={statusFilter} onpick={v => statusFilter = v} />
-        {#if slaOptions.length}
-          <select class="sla-filter" bind:value={slaFilter} aria-label="Filter by SLA">
-            <option value="all">All SLAs</option>
-            {#each slaOptions as [k, n] (k)}<option value={k}>{k} ({n})</option>{/each}
-            {#if projects.some(p => !slaOf(p))}<option value="__none">Not in the dashboard ({projects.filter(p => !slaOf(p)).length})</option>{/if}
-          </select>
+        {#if Object.keys(dashInfo).length}
+          <label class="sla-only" title="Only projects with a maintenance contract (SLA) in the dashboard">
+            <input type="checkbox" bind:checked={slaOnly} /> Has SLA
+          </label>
         {/if}
         <div class="actions">
           <button class="btn-sm" onclick={() => refreshCores(true)} disabled={refreshing} title="Fetch every project's origin and check Drupal's latest releases again">{refreshing ? `Refreshing ${refreshDone}/${projects.length}` : 'Refresh'}</button>
-          <button class="btn-sm" onclick={toggleAll}>Toggle All</button>
         </div>
       </div>
 
-      <ul class="project-list" data-tour="projects" onscroll={closePop}>
-        {#each visible as project (project.name)}
-          <li class:selected={selected[project.name]}>
-            <label>
-              <input type="checkbox" bind:checked={selected[project.name]} />
-              <span class="namecell">
-                <span class="name">{project.name}</span>
-                {#if project.repoFile}<span class="badge badge-repo" title="Settings from the repo's drupal-updater.yaml">repo config</span>{/if}
-                {#if dashInfo[project.name]}{@const d = dashInfo[project.name]}
-                  <button type="button" class="sla" class:stale={d.stale} aria-haspopup="dialog" aria-expanded={pop?.local === project.name}
+      <div class="project-list" data-tour="projects" onscroll={closePop}>
+        {#each grouped as g (g.key)}
+          {@const open = !folded[g.key]}
+          {@const allOn = g.items.every(p => selected[p.name])}
+          <div class="group group-{g.key}">
+            <button type="button" class="group-toggle" aria-expanded={open} onclick={() => folded[g.key] = open}>
+              <span class="chev" aria-hidden="true">{open ? '▾' : '▸'}</span>{g.label} <span class="count">{g.items.length}</span>
+            </button>
+            <button type="button" class="group-select" onclick={() => toggleGroup(g.items)}>{allOn ? 'Deselect all' : 'Select all'}</button>
+          </div>
+          {#if open}
+            <ul>
+              {#each g.items as project (project.name)}
+                {@const st = coreOf(project)}
+                {@const d = dashInfo[project.name]}
+                <li class:selected={selected[project.name]}>
+                  <label>
+                    <input type="checkbox" bind:checked={selected[project.name]} />
+                    <span class="namecell">
+                      <span class="name">{project.name}</span>
+                      {#if project.repoFile}<span class="repo-mark" title="Has a drupal-updater.yaml in the repository">✓<span class="sr">repo config</span></span>{/if}
+                      {#if d?.sla}<span class="sla-mark" title="Has an SLA">SLA</span>{/if}
+                    </span>
+                    <span class="versions mono">
+                      {#if project.core && st && st.status !== 'current'}
+                        <span class="from">{project.core}</span><span class="arrow" aria-hidden="true">→</span><span class="target">{st.latest}</span>
+                        <span class="sr">{CORE_TITLE[st.status]?.(st)}</span>
+                      {:else if project.core}
+                        <span class="from">{project.core}</span>
+                      {/if}
+                    </span>
+                    <span class="mods">{#if d?.securityKnown && d.securityUpdates?.length}{d.securityUpdates.length} {d.securityUpdates.length === 1 ? 'module' : 'modules'}<span class="sr"> with security updates</span>{/if}</span>
+                  </label>
+                  <button type="button" class="info" aria-label="Details for {project.name}" aria-haspopup="dialog" aria-expanded={pop?.local === project.name}
                     onmouseenter={(e) => openPop(e, project.name)} onmouseleave={schedulePopClose} onfocus={(e) => openPop(e, project.name)} onblur={schedulePopClose}
-                    onclick={(e) => togglePin(e, project.name)}>{d.sla || 'no SLA'}</button>
-                  {#if d.url}<button type="button" class="dash-link" title="Open {d.name} in the dashboard" aria-label="Open {d.name} in the dashboard" onclick={(e) => { e.preventDefault(); e.stopPropagation(); BrowserOpenURL(d.url); }}>↗</button>{/if}
-                {/if}
-              </span>
-              <span class="corecell">
-                {#if project.core}{@const st = coreOf(project)}<span class="core" title={(st && CORE_TITLE[st.status]?.(st)) || 'Installed Drupal core (composer.lock)'}>{#if st}<i class="dot dot-{st.status}" aria-hidden="true"></i><span class="sr">{CORE_TITLE[st.status]?.(st)}: </span>{/if}{project.core}</span>{/if}
-              </span>
-              <!-- rtl + ellipsis cuts the front of the path; <bdi> keeps the text itself left-to-right -->
-              <span class="path" title={project.path}><bdi>{project.path}</bdi></span>
-            </label>
-          </li>
+                    onclick={(e) => togglePin(e, project.name)}>i</button>
+                </li>
+              {/each}
+            </ul>
+          {/if}
         {/each}
-      </ul>
+      </div>
 
       {#if projects.length > 0 && visible.length === 0}
         <p class="empty">No projects match the filters.</p>
@@ -557,9 +580,8 @@
           <button type="button" tabindex="-1" class="mode-label" class:on={config.UpdateMode === 'disaster'} onclick={() => setMode('disaster')}>Disaster</button>
           <span class="mode-hint">{config.UpdateMode === 'disaster' ? 'security fixes only' : 'all minor and patch updates'}</span>
         </div>
-        {#if hiddenSelected > 0}<span class="hint">{hiddenSelected} selected {hiddenSelected === 1 ? 'is' : 'are'} hidden by the filters</span>{/if}
-        <button class="btn-primary" data-tour="start" onclick={doStart} disabled={!projects.some(p => selected[p.name])}>
-          Update {selectedCount || ''} selected
+        <button class="btn-primary" data-tour="start" onclick={doStart} disabled={!selectedCount}>
+          {selectedCount ? `Update ${selectedCount} ${selectedCount === 1 ? 'project' : 'projects'}` : 'Select projects to update'}{hiddenSelected > 0 ? ` (${hiddenSelected} hidden)` : ''}
         </button>
       </div>
     </section>
@@ -573,7 +595,7 @@
           {/each}
         </nav>
         <div class="settings-content">
-      <div class="settings-section" role="tabpanel" id="panel-dashboard" aria-labelledby="tab-dashboard" hidden={settingsTab !== 'dashboard'}>
+      <div class="settings-section" role="tabpanel" id="panel-dashboard" data-tour="dashboard" aria-labelledby="tab-dashboard" hidden={settingsTab !== 'dashboard'}>
         <div class="section-head">
           <h3>Dashboard</h3>
           <p class="hint">Optional. Shows each project's SLA and a link to its page in the applications dashboard. Read-only: nothing is written back.</p>
@@ -848,7 +870,7 @@
           <li class="status-item confirm-item">
             <button class="status-btn" onclick={() => { prevView = 'running'; detailProject = name; view = 'detail'; }}>
               <span class="status-indicator status-{statuses[name]}"></span>
-              <span class="status-label">{statuses[name].toUpperCase()}</span>
+              <span class="status-label">{STATUS_TEXT[statuses[name]] || statuses[name]}</span>
               <span class="name">{name}</span>
             </button>
             {#if statuses[name] === 'running'}
@@ -910,9 +932,17 @@
       <div class="panel-header">
         <button class="btn-sm" onclick={() => view = prevView || 'running'}>← Back</button>
         <h2>{detailProject}</h2>
-        <span class="badge badge-{statuses[detailProject]}">{statuses[detailProject]?.toUpperCase()}</span>
+        <span class="badge badge-{statuses[detailProject]}">{STATUS_TEXT[statuses[detailProject]] || statuses[detailProject]}</span>
       </div>
-      <pre class="log-output">{logs[detailProject] || 'Waiting...'}</pre>
+      {#if results[detailProject]}
+        <RunResult status={results[detailProject].status} text={results[detailProject].text} />
+        <details class="full-log">
+          <summary>Full log</summary>
+          <pre class="log-output">{logs[detailProject]}</pre>
+        </details>
+      {:else}
+        <pre class="log-output">{logs[detailProject] || 'Waiting...'}</pre>
+      {/if}
       {#if screens[detailProject]}
         <h3 class="live-title">Claude session {statuses[detailProject] === 'running' ? '(live)' : '(last screen)'}</h3>
         <pre class="log-output live-output">{screens[detailProject]}</pre>
@@ -956,7 +986,7 @@
   }
 
   h1 {
-    font-size: 1.35rem;
+    font-size: var(--fs2);
     font-weight: 800;
     letter-spacing: -0.02em;
     display: flex;
@@ -967,13 +997,13 @@
   .spark { width: 1.6em; height: 1.6em; padding: 0.3em; flex: none; border-radius: 0.35em; color: var(--text); box-sizing: border-box; }
 
   h2 {
-    font-size: 1.1rem;
+    font-size: var(--fs1);
     font-weight: 700;
     letter-spacing: -0.01em;
   }
 
   h3 {
-    font-size: 0.95rem;
+    font-size: var(--fs1);
     font-weight: 700;
     margin-top: 20px;
     margin-bottom: 8px;
@@ -993,7 +1023,7 @@
     padding: 6px 14px;
     border-radius: var(--radius);
     cursor: pointer;
-    font: 600 0.82rem var(--font-body);
+    font: 600 var(--fs0) var(--font-body);
     transition: background 0.15s, color 0.15s;
   }
 
@@ -1025,17 +1055,13 @@
     display: grid;
     grid-template-columns: 1fr; /* the tab names the section, head sits above the fields */
     gap: 14px;
-    padding: 20px;
-    margin-bottom: 14px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 12px;
+    padding: 2px 0 20px; /* the tab frames the section: no card around it */
   }
   .settings-layout { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 20px; align-items: start; }
   .settings-tabs { position: sticky; top: 0; display: flex; flex-direction: column; gap: 2px; }
   .settings-tabs button {
     text-align: left; background: none; border: 0; border-radius: 8px; padding: 9px 12px;
-    font: 600 0.88rem var(--font-body); color: var(--text-muted); cursor: pointer;
+    font: 600 var(--fs0) var(--font-body); color: var(--text-muted); cursor: pointer;
     transition: background 0.15s, color 0.15s;
   }
   .settings-tabs button:hover { background: var(--hover); color: var(--text); }
@@ -1052,7 +1078,7 @@
   .advanced { display: grid; gap: 12px; }
   .advanced summary {
     cursor: pointer;
-    font-size: 0.8rem;
+    font-size: var(--fs0);
     font-weight: 600;
     color: var(--accent);
     width: max-content;
@@ -1084,43 +1110,57 @@
     background: var(--surface);
   }
 
-  .project-list li {
-    border-bottom: 1px solid var(--border);
-    transition: background 0.1s;
-  }
-
-  .project-list li:last-child { border-bottom: none; }
-
+  .project-list ul { list-style: none; margin: 0; padding: 0; }
+  .project-list li { display: flex; align-items: center; padding-right: 14px; position: relative; border-top: 1px solid var(--border); transition: background 0.1s; } /* contains the screen-reader-only text, which would otherwise stretch the page */
   .project-list li:hover { background: var(--hover); }
+  .project-list li.selected { background: var(--selected); box-shadow: inset 3px 0 0 var(--accent); }
 
-  .project-list li.selected {
-    background: var(--selected);
-    box-shadow: inset 3px 0 0 var(--accent);
-  }
+  /* group header: the urgency carries the list, so its colour sits on the rule at the left */
+  .group { display: flex; align-items: center; gap: 10px; padding: 0 14px; border-top: 1px solid var(--border); position: sticky; top: 0; z-index: 1; background: var(--surface); }
+  .group:first-child { border-top: 0; }
+  .group-security { box-shadow: inset 3px 0 0 var(--danger); }
+  .group-behind { box-shadow: inset 3px 0 0 var(--warn); }
+  .group-current { box-shadow: inset 3px 0 0 var(--success); }
+  .group-unknown { box-shadow: inset 3px 0 0 var(--border-strong); }
+  .group-toggle { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; padding: 10px 0; background: none; border: 0; color: var(--text); font: 700 var(--fs1) var(--font-body); text-align: left; cursor: pointer; }
+  .group-toggle .chev { width: 1em; color: var(--text-muted); }
+  .group-toggle .count { font-weight: 400; color: var(--text-muted); }
+  .group-select { background: none; border: 0; color: var(--accent); font: 600 var(--fs-1) var(--font-body); cursor: pointer; padding: 4px 0; }
+  .group-select:hover { text-decoration: underline; }
 
-  /* fixed columns so version and path line up on every row */
+  /* row: name, then the version it moves to, then what the dashboard says is pending */
   .project-list label {
     display: grid;
-    grid-template-columns: 16px clamp(8rem, 30%, 16rem) 6.5rem minmax(0, 1fr);
+    grid-template-columns: 16px minmax(0, 1fr) auto minmax(4.5rem, auto);
+    flex: 1;
+    min-width: 0;
     align-items: center;
     gap: 12px;
-    padding: 10px 14px;
+    padding: 9px 14px;
     cursor: pointer;
   }
   .project-list .namecell { display: flex; align-items: center; gap: 8px; min-width: 0; }
 
-  .project-list .core { display: inline-flex; align-items: center; gap: 6px; font: 0.78rem var(--font-mono); color: var(--text-muted); opacity: 0.8; }
-  .save-note { margin-right: 12px; font-size: 0.82rem; color: var(--text-muted); align-self: center; }
+  .versions { font: var(--fs-1) var(--font-mono); white-space: nowrap; color: var(--text-muted); }
+  .versions .arrow { padding: 0 5px; }
+  li .versions .target { font-weight: 600; }
+  .group-security + ul .versions .target { color: var(--danger); }
+  .group-behind + ul .versions .target { color: var(--warn); }
+  .mods { font-size: var(--fs-1); color: var(--danger); white-space: nowrap; text-align: right; }
+  .group-behind + ul .mods { color: var(--text-muted); }
+  .info { width: 1.5rem; height: 1.5rem; border-radius: 50%; border: 1px solid var(--border-strong); background: none; color: var(--text-muted); font: 700 var(--fs-1) var(--font-body); font-style: italic; cursor: pointer; display: grid; place-items: center; }
+  .info:hover, .info[aria-expanded='true'] { color: var(--accent); border-color: var(--accent); }
+  .sla-mark { flex: none; font-size: var(--fs-1); font-weight: 700; color: var(--accent); border: 1px solid currentColor; border-radius: 4px; padding: 0 4px; line-height: 1.3; cursor: default; }
+  .sla-only { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs0); font-weight: 600; color: var(--text); cursor: pointer; }
+  .sla-only input { accent-color: var(--accent); }
+  .save-note { margin-right: 12px; font-size: var(--fs0); color: var(--text-muted); align-self: center; }
   .save-note.err { color: var(--danger); }
   .save-note.ok { color: var(--success); }
   .hint.err { color: var(--danger); }
-  .sla { cursor: pointer; background: none; font-family: inherit; flex: none; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border-strong); color: var(--text-muted); }
-  .sla.stale { border-style: dashed; opacity: 0.7; }
-  .dash-link { flex: none; background: none; border: 0; padding: 0 2px; color: var(--text-muted); cursor: pointer; font-size: 0.85rem; }
-  .dash-link:hover { color: var(--accent); }
+  .repo-mark { flex: none; font-size: var(--fs0); font-weight: 700; color: var(--accent); cursor: default; }
   .unmatched { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
   .unmatched li { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 18rem); gap: 6px 10px; align-items: center; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); }
-  .unmatched .local { font: 0.82rem var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .unmatched .local { font: var(--fs0) var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .unmatched select { min-width: 0; width: 100%; }
   .unmatched .sugg { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
   .unmatched .sugg:empty { display: none; }
@@ -1128,8 +1168,8 @@
   .unmatched .why-line { grid-column: 1 / -1; }
   .unmatched .pick { grid-column: 1 / -1; }
   .dash-state { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .dash-ok { color: var(--success); font-weight: 600; font-size: 0.85rem; }
-  .core-note { max-width: 22rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dash-ok { color: var(--success); font-weight: 600; font-size: var(--fs0); }
+  .core-note { flex: 0 1 auto; min-width: 0; max-width: 22rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   .project-list input[type="checkbox"] {
     accent-color: var(--accent);
@@ -1146,18 +1186,6 @@
     white-space: nowrap;
   }
   .project-list .badge { flex: none; }
-
-  .project-list .path {
-    font-family: var(--font-mono);
-    font-size: 0.72rem;
-    color: var(--text-muted);
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    direction: rtl;
-    text-align: right;
-  }
 
   .status-list li { border-bottom: 1px solid var(--border); }
   .status-list li:last-child { border-bottom: none; }
@@ -1203,6 +1231,7 @@
   .status-running { background: var(--running-dot); border-color: var(--running); animation: pulse 1.2s ease-in-out infinite; }
   .status-success { background: var(--success); border-color: var(--success); }
   .status-failed { background: var(--danger); border-color: var(--danger); border-radius: 2px; }
+  .status-skipped { border-color: var(--success); }
   .status-cancelled { border-color: var(--text-muted); background: linear-gradient(var(--text-muted), var(--text-muted)) center / 100% 2px no-repeat; }
 
   @keyframes pulse {
@@ -1219,15 +1248,14 @@
   }
 
   .status-label {
-    font-size: 0.7rem;
+    font-size: var(--fs-1);
     font-weight: 700;
-    letter-spacing: 0.04em;
     width: 76px;
     color: var(--text-muted);
   }
 
   .badge {
-    font-size: 0.72rem;
+    font-size: var(--fs-1);
     padding: 2px 8px;
     border: 1px solid currentColor;
     border-radius: var(--radius-sm);
@@ -1260,7 +1288,7 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    font-size: 0.82rem;
+    font-size: var(--fs0);
     font-weight: 600;
     color: var(--text-muted);
   }
@@ -1277,20 +1305,20 @@
     background: var(--text); transition: transform 0.15s;
   }
   .mode-switch[aria-checked='true'] .knob { transform: translateX(18px); background: var(--on-accent); }
-  .mode-hint { font-weight: 400; font-size: 0.78rem; }
+  .mode-hint { font-weight: 400; font-size: var(--fs-1); }
 
-  input[type="text"], input[type="number"], textarea, select {
+  input[type="text"], textarea, select {
     background: var(--surface);
     border: 1px solid var(--border-strong);
     color: var(--text);
     padding: 8px 10px;
     border-radius: var(--radius);
     font-family: var(--font-body);
-    font-size: 0.85rem;
+    font-size: var(--fs0);
     transition: border-color 0.15s, box-shadow 0.15s;
   }
 
-  input[type="text"]:focus, input[type="number"]:focus, textarea:focus, select:focus {
+  input[type="text"]:focus, textarea:focus, select:focus {
     outline: none;
     border-color: var(--focus);
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus) 30%, transparent);
@@ -1300,7 +1328,7 @@
 
   textarea {
     font-family: var(--font-mono);
-    font-size: 0.78rem;
+    font-size: var(--fs-1);
     resize: vertical;
   }
 
@@ -1313,7 +1341,7 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
-    font-size: 0.8rem;
+    font-size: var(--fs0);
     font-weight: 600;
     color: var(--text-muted);
   }
@@ -1357,8 +1385,9 @@
     align-items: center;
   }
 
-  .live-title { margin: 12px 0 6px; font-size: 0.85rem; color: var(--text-muted); }
-  .live-output { font-size: 0.7rem; white-space: pre; overflow-x: auto; }
+  .full-log summary { cursor: pointer; color: var(--text-muted); font-size: var(--fs0); margin-bottom: 6px; }
+  .live-title { margin: 12px 0 6px; font-size: var(--fs0); color: var(--text-muted); }
+  .live-output { font-size: var(--fs-1); white-space: pre; overflow-x: auto; }
 
   .log-output {
     flex: 1;
@@ -1368,7 +1397,7 @@
     border-radius: var(--radius);
     padding: 14px;
     font-family: var(--font-mono);
-    font-size: 0.78rem;
+    font-size: var(--fs-1);
     line-height: 1.5;
     white-space: pre-wrap;
     word-break: break-all;
@@ -1379,7 +1408,7 @@
     text-align: center;
     color: var(--text-muted);
     padding: 40px;
-    font-size: 0.9rem;
+    font-size: var(--fs0);
   }
 
   .update-banner, .version {
@@ -1395,24 +1424,23 @@
     border-radius: 6px;
     background: var(--running-bg);
     color: var(--text);
-    font-size: 0.8rem;
+    font-size: var(--fs0);
   }
   .version {
     font-family: var(--font-mono);
-    font-size: 0.75rem;
+    font-size: var(--fs-1);
     color: var(--text-muted);
   }
 
   .search-box {
-    flex: 1;
-    max-width: 250px;
-    margin: 0 12px;
+    flex: 0 1 250px;
+    min-width: 9rem; /* the filter keeps its room; the offline note gives way */
   }
 
   .search-input {
     width: 100%;
     padding: 6px 10px;
-    font-size: 0.8rem;
+    font-size: var(--fs0);
   }
 
   .confirm-item {
@@ -1425,18 +1453,18 @@
     flex: 1;
     max-width: 300px;
     font-family: var(--font-mono);
-    font-size: 0.78rem;
+    font-size: var(--fs-1);
   }
 
   .cleanup-note {
-    font-size: 0.8rem;
+    font-size: var(--fs0);
     color: var(--text-muted);
     font-style: italic;
   }
 
   .confirm-result {
     font-family: var(--font-mono);
-    font-size: 0.78rem;
+    font-size: var(--fs-1);
     color: var(--text-muted);
   }
 
@@ -1446,7 +1474,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 0.78rem;
+    font-size: var(--fs-1);
     color: var(--text-muted);
   }
 

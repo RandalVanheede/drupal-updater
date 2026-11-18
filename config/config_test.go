@@ -168,3 +168,20 @@ func TestDashboardProjectComesFromTheRepoFile(t *testing.T) {
 		t.Fatalf("merge lost a field: %+v", got)
 	}
 }
+
+func TestOldCustomPromptIsDropped(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.yaml")
+	os.WriteFile(p, []byte("claude_prompt: \"Update {{project}}. Steps: 1. git checkout ...\"\n"), 0o644)
+	cfg, err := LoadConfig(p)
+	if err != nil || cfg.ClaudePrompt != "" {
+		t.Fatalf("an old prompt must fall back to the built-in one: %q %v", cfg.ClaudePrompt, err)
+	}
+	if b, err := os.ReadFile(p + ".claude_prompt.bak"); err != nil || !strings.Contains(string(b), "Steps: 1.") {
+		t.Fatalf("the dropped prompt should be backed up: %q %v", b, err)
+	}
+	os.WriteFile(p, []byte("claude_prompt: \"Mine. {{update_list}} {{result_file}}\"\n"), 0o644)
+	if cfg, _ := LoadConfig(p); cfg.ClaudePrompt == "" {
+		t.Fatal("a prompt written for the new steps is kept")
+	}
+}

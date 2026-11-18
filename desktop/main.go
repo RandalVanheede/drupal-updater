@@ -518,11 +518,11 @@ func (a *App) projectPath(name string) (string, error) {
 
 func (a *App) StartUpdate(req UpdateRequest) {
 	a.mu.Lock()
+	maxConc := a.cfg.MaxConcurrent
+	a.mu.Unlock()
+	n := executor.ConcurrencyCap(maxConc) // asks Docker: outside the lock, so the UI never waits on it
+	a.mu.Lock()
 	if a.sem == nil {
-		n := a.cfg.MaxConcurrent
-		if n <= 0 {
-			n = 3
-		}
 		a.sem = make(chan struct{}, n) // shared by every batch so max_concurrent holds across overlapping starts
 	}
 	sem := a.sem
@@ -543,8 +543,6 @@ func (a *App) StartUpdate(req UpdateRequest) {
 		ctx         context.Context
 	}
 
-	cfg := a.config()
-	projects, err := discovery.DiscoverProjects(cfg.BaseFolders, cfg.ProjectPaths, cfg.ExcludedProjects, cfg.ScanDepth)
 	var jobs []job
 	for _, projectName := range req.Projects {
 		a.mu.Lock()
@@ -557,19 +555,15 @@ func (a *App) StartUpdate(req UpdateRequest) {
 		if busy {
 			continue // already running: never start a second session for the same project
 		}
-		p, ok := discovery.Find(projects, projectName)
-		if !ok {
-			msg := fmt.Sprintf("project %s not found in the project folders", projectName)
-			if err != nil {
-				msg = err.Error()
-			}
+		projectPath, err := a.projectPath(projectName) // the discovery cache, rescanned only when the folder is gone
+		if err != nil {
+			msg := err.Error()
 			runtime.EventsEmit(a.ctx, "status-update", map[string]string{"project": projectName, "status": "failed", "command": "discover", "output": msg})
 			a.mu.Lock()
 			delete(a.cancels, projectName)
 			a.mu.Unlock()
 			continue
 		}
-		projectPath := p.Path
 
 		pCfg := config.ForProject(a.config().Project(projectName), projectPath)
 
@@ -768,6 +762,9 @@ func (a *App) MergeRequest(name, branch string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	a.cancels[name] = cancel
 	summary := a.summaries[name]
+	if summary == "" {
+		summary = executor.LastSummary(name) // the run finished before a restart
+	}
 	pc := config.ForProject(a.cfg.Project(name), path)
 	a.mu.Unlock()
 

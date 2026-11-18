@@ -2,7 +2,10 @@ package executor
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -22,43 +25,25 @@ const (
 	claudePoll           = 2 * time.Second
 )
 
-// DefaultClaudePrompt is used when claude_prompt is not set in the config.
-// Placeholders: {{project}} {{path}} {{start_branch}} {{temp_branch}} {{ignored_packages}} {{smoke_paths}}
-// {{project_instructions}} {{result_file}} and {{updates}} (the update_mode rules for step 8).
+// DefaultClaudePrompt is used when claude_prompt is not set in the config. The app itself does the fixed steps
+// around it (checkout, ddev start, composer install, drush deploy before; drush updb and cex, checks and ddev stop
+// after) and fills in what it found. Placeholders: {{project}} {{path}} {{start_branch}} {{temp_branch}}
+// {{setup}} {{update_list}} {{previous_failure}} {{ignored_packages}} {{project_instructions}} {{result_file}}
+// and {{updates}} (the update_mode rules).
 const DefaultClaudePrompt = `You are updating the Drupal project "{{project}}" located at {{path}} (your working directory). Work fully autonomously: nobody is watching, so never ask questions.
 
-Branches:
-- Start branch: {{start_branch}}. If it does not exist locally, use the repository's real default branch (origin/HEAD, else main/master).
-- Temp branch: {{temp_branch}}. All work happens on this branch.
+Branches: start branch {{start_branch}}, temp branch {{temp_branch}}. All work happens on the temp branch.
 
-Project notes: if the repository has an AGENTS.md (or else a CLAUDE.md), read it before starting and follow it where it doesn't conflict with this task. Flows listed in its testing / smoke test section are extra checks for steps 6 and 11.
+What the app already did: {{setup}}
 
-Steps, in order:
-1. git checkout {{start_branch}}, then git pull --rebase --autostash
-2. git checkout -B {{temp_branch}} (this also resets the branch if it already exists)
-3. Make sure ddev is running: ddev describe, and ddev start if it is not
-4. ddev composer install
-5. ddev drush deploy -y
-6. Smoke tests, baseline (see below): the site as it is before any update
-7. ddev composer update 'drupal/core-*' 'symfony/*' 'twig/*' --with-all-dependencies
-8. Updates, see below
-9. ddev drush updb -y
-10. ddev drush cex -y
-11. Smoke tests again, after the update, and compare with the baseline (see below)
-12. ddev stop
+Project notes: if the repository has an AGENTS.md (or else a CLAUDE.md), read it before starting and follow it where it doesn't conflict with this task. Flows in its testing / smoke test section are not covered by the app's checks: carry them out (with curl and drush) after updating and fix what the update broke.
+{{previous_failure}}
+Your task: apply the updates, then stop. Afterwards the app runs ddev drush updb and cex, checks that no database updates or config changes are pending, compares the site with the baseline it took before you started (anonymous and admin pages, recent errors in the log) and, if something regressed, starts another session to fix it. You don't need to do those steps yourself, but check that the site still boots (ddev drush status) when you change a lot.
+
+Updates found by the app before you started:
+{{update_list}}
 
 {{updates}}
-Smoke tests (steps 6 and 11). Run the same checks both times and keep the baseline results. Get the site URL from ddev describe; for admin pages log in with ddev drush uli and follow that link with curl, keeping the session in a cookie jar.
-- ddev drush status bootstraps Drupal; ddev drush cr succeeds.
-- Anonymous, each must return 200 without PHP errors, exceptions or "The website encountered an unexpected error" in the HTML: /, /user/login, the newest published node of each content type, /search if the search module is enabled. A made-up path must return 404, not 500.
-- As admin, each must return 200 without errors: /admin/content, /admin/structure, /admin/config, /node/add/<type> for each content type, and /admin/reports/status without Error-level requirements.
-- No new Error-level log entries since the baseline (ddev drush ws --severity=Error).
-- After step 10: ddev drush cst shows nothing pending.
-- Extra paths for this project (prefix admin: means check while logged in): {{smoke_paths}}
-- The flows from the project's AGENTS.md / CLAUDE.md testing section, if any, carried out with curl and drush.
-A regression is a check that passed at the baseline and fails after the update. A check that already failed at the baseline is pre-existing: report it, don't try to fix it.
-For each regression: find the cause (page output, logs) and fix it when the update caused it (cache, config import, update hook, patch, constraint). If you can't, roll back only the package that causes it, as with a skipped security fix, and run the checks again. If a regression remains, finish with status failed and name the broken check.
-
 Packages that must NOT be updated: {{ignored_packages}}
 {{project_instructions}}
 Solve simple problems yourself and retry, for example:
@@ -77,12 +62,33 @@ Rules (enforced; refused commands explain what to do instead):
 - Keep the changes to what the update needs; local environment fixes (.ddev, database) are fine.
 
 Finish by writing the file {{result_file}} containing JSON only:
-{"status": "success" | "failed", "summary": "<what was updated (core version change, each updated package with old -> new version), each skipped update or advisory with its reason, smoke tests: checks run, regressions fixed, packages rolled back, pre-existing failures; or what failed and why>"}
-On success you must be on branch {{temp_branch}} when you write it. On failure, first return to the start branch (stash a dirty tree if needed) and delete {{temp_branch}}, then write the file.`
+{"status": "success" | "failed", "summary": "<see below>"}
+The summary is read by a person: short lines separated by \n, each starting with "- ", one fact per line, no paragraphs. On success: the core version change; each updated package as "name old -> new" (related packages on one line, e.g. "drupal/core* 11.4.8 -> 11.4.10"); each skipped update or advisory with its reason; what you fixed along the way; what a person must still do. On failure the first line says what failed, then what you tried and what is needed.
+Stay on branch {{temp_branch}} when you write it, also on failure: the app cleans up.`
 
-// Step 8 of DefaultClaudePrompt per update_mode, filled in as {{updates}}.
+// repairPrompt is used when the app's checks after an update found problems.
+const repairPrompt = `You are fixing an update of the Drupal project "{{project}}" at {{path}} (your working directory), on the branch {{temp_branch}} (start branch {{start_branch}}). Work fully autonomously: nobody is watching, so never ask questions.
+
+An earlier session updated the dependencies and reported:
+{{previous_summary}}
+
+After that the app ran ddev drush updb -y and ddev drush cex -y and checked the site against a baseline taken before the update. These problems remain:
+{{problems}}
+
+For each problem: find the cause (page output, ddev drush ws, logs) and fix it when the update caused it (cache, config import, update hook, patch, constraint). If you can't, roll back only the package that causes it (ddev composer require '<package>:<old version>' or revert its lines in composer.json/composer.lock and run ddev composer install), as with a skipped security fix. You may run ddev drush updb, cex and cr yourself while fixing; the app checks everything again afterwards.
+
+Packages that must NOT be updated: {{ignored_packages}}
+{{project_instructions}}
+Rules (enforced): do NOT commit, merge or push; never throw away local work or data (no git reset --hard, git clean, git stash drop/clear, ddev delete/clean, database resets); never delete any branch.
+
+Finish by writing the file {{result_file}} containing JSON only:
+{"status": "success" | "failed", "summary": "<see below>"}
+The summary is read by a person: short lines separated by \n, each starting with "- ", one fact per line, no paragraphs: per problem what caused it and what you changed (or that it was not a real problem), packages rolled back with their versions, or what still fails and why.
+Stay on branch {{temp_branch}} when you write it.`
+
+// The update rules of DefaultClaudePrompt per update_mode, filled in as {{updates}}.
 const (
-	disasterUpdates = `Updates (step 8), disaster mode: security fixes only. Goal: fix every security advisory that can be fixed without a major upgrade.
+	disasterUpdates = `Updates, disaster mode: security fixes only. Do not update anything that has no advisory, core included. Goal: fix every security advisory that can be fixed without a major upgrade.
 - Find advisories with ddev composer audit --format=json (it covers drupal/* and all other Composer packages). Cross-check Drupal ones with ddev drush pm:security if that command exists.
 - "Major" is the first version number as Composer sees it. Drupal contrib "8.x-1.5" is 1.5.0 to Composer, so 8.x-1.x and 1.x are the same major; 1.x to 2.x is a major upgrade.
 - Drupal core first, because contrib fixes may need a newer core minor: move drupal/core and its companions (drupal/core-recommended, drupal/core-composer-scaffold, drupal/core-project-message, and drupal/core-dev if required) together to the lowest fixed release within the installed major. A minor bump (e.g. 10.3 to 10.5) is fine; a new major (10 to 11) never.
@@ -90,7 +96,8 @@ const (
 - Skip an advisory, and keep going with the rest, when the fix needs: a new major of the package, a new major of Drupal core (directly or through its dependencies), a newer PHP than the project runs, or an update of a package listed below as not to be updated. Never use --ignore-platform-reqs. Never move core to a new major.
 - If one package's fix conflicts, revert just that change (git checkout -- composer.json composer.lock, then redo the others) rather than giving up on all of them.
 - Finish with ddev composer audit again and compare: every advisory left must be one you deliberately skipped.`
-	standardUpdates = `Updates (step 8), standard mode: every minor and patch update, never a major.
+	standardUpdates = `Updates, standard mode: every minor and patch update, never a major.
+- Start with core and its framework: ddev composer update 'drupal/core-*' 'symfony/*' 'twig/*' --with-all-dependencies.
 - "Major" is the first version number as Composer sees it. Drupal contrib "8.x-1.5" is 1.5.0 to Composer, so 8.x-1.x and 1.x are the same major; 1.x to 2.x is a major upgrade.
 - Run ddev composer update --with-all-dependencies. If packages are listed below as not to be updated, name every other direct dependency instead (ddev composer show --direct --name-only).
 - Then check git diff composer.lock: any package that moved to a new major (possible with loose constraints such as * or >=) goes back to its old major with ddev composer require '<package>:^<old x.y>' --with-all-dependencies. Never move core to a new major. Never use --ignore-platform-reqs.`
@@ -116,6 +123,7 @@ var claudeCfg struct {
 	model      string
 	prompt     string
 	updates    string // {{updates}} text for the configured update_mode
+	disaster   bool   // security fixes only
 	allowed    []string
 	permission string
 	timeout    time.Duration
@@ -135,7 +143,8 @@ func Configure(cfg *config.Config) {
 	c.model = orDefault(cfg.ClaudeModel, defaultClaudeModel)
 	c.prompt = orDefault(cfg.ClaudePrompt, DefaultClaudePrompt)
 	c.updates = standardUpdates
-	if cfg.UpdateMode == "disaster" {
+	c.disaster = cfg.UpdateMode == "disaster"
+	if c.disaster {
 		c.updates = disasterUpdates
 	}
 	c.allowed = defaultClaudeAllowed
@@ -167,13 +176,20 @@ func safePermissionMode(m string) string {
 
 func sq(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
+// safeName makes a project name usable as a folder and tmux session name. Names that had to change get a short
+// hash of the original, so "my.site" and "my-site" never share a run folder (or a merge request description).
 func safeName(s string) string {
-	return strings.Map(func(r rune) rune {
+	clean := strings.Map(func(r rune) rune {
 		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' {
 			return r
 		}
 		return '-'
 	}, s)
+	if clean == s {
+		return s
+	}
+	sum := sha256.Sum256([]byte(s))
+	return clean + "-" + hex.EncodeToString(sum[:4])
 }
 
 // runDirFor is where a project's Claude run keeps its prompt, scripts, shims and guard state.
@@ -244,46 +260,59 @@ type claudeResult struct {
 	Summary string `json:"summary"`
 }
 
-// runClaude hands the whole update to a Claude Code session in tmux and waits
-// for the result file the session writes. Go only verifies and cleans up.
-// promptTmpl is filled with the placeholders below plus the extra old/new pairs. With empty start/temp
-// branches nothing is cleaned up on failure and the branch is not checked on success.
-func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, out chan<- StatusUpdate, promptTmpl string, extra ...string) {
-	startBranch = ResolveStartBranch(path, startBranch)
-	session := SessionName(name)
-	// Terminal statuses are sent only after the session is dead and the repo is settled.
-	send := func(status, command, output string) {
-		if status != "running" {
-			tmux("kill-session", "-t", "="+session)
-		}
-		out <- StatusUpdate{ProjectName: name, Status: status, Command: command, Output: output}
-	}
-	fail := func(msg string) {
-		logging.Error("[%s] %s", name, msg)
-		tmux("kill-session", "-t", "="+session)
-		if tempBranch != "" {
-			if kept, err := CleanupKeepWork(path, startBranch, tempBranch); err != nil {
-				logging.Error("[%s] cleanup: %v", name, err)
-			} else if kept != "" {
-				msg += "\nThe work done so far is kept on branch " + kept
-			}
-		}
-		send("failed", "Claude session", msg)
-	}
-
-	runDir, err := runDirFor(name)
+// runPaths are the files a project's Claude session uses.
+func runPaths(name string) (runDir, outDir, resultFile string, err error) {
+	runDir, err = runDirFor(name)
 	if err != nil {
-		fail(err.Error())
-		return
+		return "", "", "", err
 	}
-	outDir := filepath.Join(runDir, "out") // added via --add-dir so Claude can write the result file
-	resultFile := filepath.Join(outDir, "result.json")
+	outDir = filepath.Join(runDir, "out") // added via --add-dir so Claude can write the result file
+	return runDir, outDir, filepath.Join(outDir, "result.json"), nil
+}
+
+// fillPrompt fills the common placeholders plus the extra old/new pairs.
+func fillPrompt(tmpl, name, path, startBranch, tempBranch, resultFile string, extra ...string) string {
+	proj := config.ForProject(claudeCfg.projects.Project(name), path)
+	ignored, smoke := "none", "none"
+	if len(proj.IgnoredPackages) > 0 {
+		ignored = strings.Join(proj.IgnoredPackages, ", ")
+	}
+	if len(proj.SmokePaths) > 0 {
+		smoke = strings.Join(proj.SmokePaths, ", ")
+	}
+	instructions := ""
+	if proj.ClaudeInstructions != "" {
+		instructions = "\nExtra instructions for this project:\n" + proj.ClaudeInstructions + "\n"
+	}
+	return strings.NewReplacer(append([]string{
+		"{{ignored_packages}}", ignored, "{{smoke_paths}}", smoke, "{{project_instructions}}", instructions, "{{updates}}", claudeCfg.updates,
+		"{{project}}", name, "{{path}}", path, "{{start_branch}}", startBranch,
+		"{{temp_branch}}", tempBranch, "{{result_file}}", resultFile,
+	}, extra...)...).Replace(tmpl)
+}
+
+// limitMarkers are what Claude Code prints when the API refuses to continue; seen on screen after the turn
+// ended without a result, they end the run at once instead of after the full timeout.
+var limitMarkers = []string{"usage limit", "Usage limit", "rate_limit_error", "API Error: 429", "API Error: 529", "overloaded_error", "Overloaded"}
+
+// stallAfter is how long a session may sit idle after ending its turn without a result before the run gives up.
+var stallAfter = 10 * time.Minute
+
+// claudeSession runs one Claude Code session in tmux on prompt (whose {{result_file}} must already be filled
+// with resultFile from runPaths) and waits for the result file. It returns the result, or an error saying why
+// there is none: cancelled, timed out, exited, a usage or rate limit, or stalled. The session is always gone
+// when it returns. Screens stream to out; label names the session in the log.
+func claudeSession(ctx context.Context, name, path, prompt, label string, out chan<- StatusUpdate) (claudeResult, error) {
+	session := SessionName(name)
+	defer tmux("kill-session", "-t", "="+session)
+	runDir, outDir, resultFile, err := runPaths(name)
+	if err != nil {
+		return claudeResult{}, err
+	}
 	turnFile := filepath.Join(runDir, "turn-done")
 	exitFile := filepath.Join(runDir, "exit")
-
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		fail(err.Error())
-		return
+		return claudeResult{}, err
 	}
 	for _, f := range []string{resultFile, turnFile, exitFile} {
 		os.Remove(f)
@@ -295,23 +324,6 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 	if err := trustExact(outDir); err != nil { // newer Claude prompts for untrusted --add-dir folders
 		logging.Error("[%s] could not pre-trust %s: %v", name, outDir, err)
 	}
-
-	proj := config.ForProject(claudeCfg.projects.Project(name), path)
-	ignored, smoke := "none", "none"
-	if len(proj.IgnoredPackages) > 0 {
-		ignored = strings.Join(proj.IgnoredPackages, ", ")
-	}
-	if len(proj.SmokePaths) > 0 {
-		smoke = strings.Join(proj.SmokePaths, ", ")
-	}
-	if proj.ClaudeInstructions != "" {
-		proj.ClaudeInstructions = "\nExtra instructions for this project:\n" + proj.ClaudeInstructions + "\n"
-	}
-	prompt := strings.NewReplacer(append([]string{
-		"{{ignored_packages}}", ignored, "{{smoke_paths}}", smoke, "{{project_instructions}}", proj.ClaudeInstructions, "{{updates}}", claudeCfg.updates,
-		"{{project}}", name, "{{path}}", path, "{{start_branch}}", startBranch,
-		"{{temp_branch}}", tempBranch, "{{result_file}}", resultFile,
-	}, extra...)...).Replace(promptTmpl)
 
 	settings := map[string]any{"hooks": map[string]any{"Stop": []any{map[string]any{
 		"hooks": []any{map[string]any{"type": "command", "command": "touch " + sq(turnFile)}},
@@ -325,17 +337,14 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 		sq(strings.Join(claudeCfg.allowed, ",")), sq(strings.Join(claudeDenied, ",")), sq(filepath.Join(runDir, "prompt.md")), sq(exitFile))
 	exe, err := os.Executable()
 	if err != nil {
-		fail("cannot locate own binary for the git/ddev guard: " + err.Error())
-		return
+		return claudeResult{}, errors.New("cannot locate own binary for the git/ddev guard: " + err.Error())
 	}
 	realGit, realDdev := lookEnriched("git"), lookEnriched("ddev")
 	if !filepath.IsAbs(realGit) || !filepath.IsAbs(realDdev) {
-		fail("git and ddev must be installed (not found on PATH)")
-		return
+		return claudeResult{}, errors.New("git and ddev must be installed (not found on PATH)")
 	}
 	if err := os.MkdirAll(filepath.Join(runDir, "bin"), 0o755); err != nil {
-		fail(err.Error())
-		return
+		return claudeResult{}, err
 	}
 	files := map[string]string{"prompt.md": prompt, "settings.json": string(settingsJSON), "run.sh": script,
 		"bin/git":  fmt.Sprintf("#!/bin/sh\nexec %s guard git %s \"$@\"\n", sq(exe), sq(realGit)),
@@ -347,34 +356,30 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 		}
 		os.Remove(filepath.Join(runDir, f)) // earlier run's copy is read-only
 		if err := os.WriteFile(filepath.Join(runDir, f), []byte(content), perm); err != nil {
-			fail(err.Error())
-			return
+			return claudeResult{}, err
 		}
 	}
 
 	if o, err := tmux("new-session", "-d", "-x", "200", "-y", "50", "-s", session, "-c", path, loginShell(), "-l", filepath.Join(runDir, "run.sh")); err != nil {
-		fail("tmux failed: " + err.Error() + "\n" + o)
-		return
+		return claudeResult{}, errors.New("tmux failed: " + err.Error() + "\n" + o)
 	}
-
-	send("running", fmt.Sprintf("Claude (%s) in tmux session %s", claudeCfg.model, session),
-		fmt.Sprintf("Watch or take over: %s\nPrompt: %s\n", AttachCommand(name), filepath.Join(runDir, "prompt.md")))
-	logging.Info("[%s] Claude session started: %s", name, session)
+	out <- StatusUpdate{ProjectName: name, Status: "running", Command: fmt.Sprintf("%s: Claude (%s) in tmux session %s", label, claudeCfg.model, session),
+		Output: fmt.Sprintf("Watch or take over: %s\nPrompt: %s\n", AttachCommand(name), filepath.Join(runDir, "prompt.md"))}
+	logging.Info("[%s] Claude session started: %s (%s)", name, session, label)
 
 	deadline := time.After(claudeCfg.timeout)
 	tick := time.NewTicker(claudePoll)
 	defer tick.Stop()
-	var notifiedTurn time.Time
+	var turnSeen time.Time   // last time the Stop hook fired
+	var lastChange time.Time // last time the screen changed
 	notifiedPrompt := false
 	var lastPane string
 	for {
 		select {
 		case <-ctx.Done():
-			send("cancelled", "Claude session", "Cancelled")
-			return
+			return claudeResult{}, ctx.Err()
 		case <-deadline:
-			fail(fmt.Sprintf("timed out after %s; session killed", claudeCfg.timeout))
-			return
+			return claudeResult{}, fmt.Errorf("timed out after %s; session killed", claudeCfg.timeout)
 		case <-tick.C:
 		}
 
@@ -383,47 +388,79 @@ func runClaude(ctx context.Context, name, path, startBranch, tempBranch string, 
 			if json.Unmarshal(data, &r) != nil {
 				continue // partially written, read again next tick
 			}
-			if r.Status != "success" {
-				fail("Claude reported failure: " + r.Summary)
-				return
-			}
-			if tempBranch != "" {
-				if cur, _ := git(path, "branch", "--show-current"); strings.TrimSpace(cur) != tempBranch {
-					fail(fmt.Sprintf("Claude reported success but repo is on %q, expected %q", strings.TrimSpace(cur), tempBranch))
-					return
-				}
-			}
-			logging.Info("[%s] Claude finished: %s", name, r.Summary)
-			send("success", "Claude session", r.Summary+LockDiff(path))
-			return
+			return r, nil
 		}
 
-		if _, err := tmux("has-session", "-t", "="+session); err != nil {
+		// capture-pane doubles as the liveness check: it fails once the session is gone
+		pane, err := tmux("capture-pane", "-p", "-t", "="+session+":")
+		if err != nil {
 			code, _ := os.ReadFile(exitFile)
-			fail(fmt.Sprintf("Claude exited without writing a result (exit %s)", strings.TrimSpace(string(code))))
-			return
+			return claudeResult{}, fmt.Errorf("Claude exited without writing a result (exit %s)", strings.TrimSpace(string(code)))
 		}
-		pane, _ := tmux("capture-pane", "-p", "-t", "="+session+":")
 		if pane != lastPane {
-			lastPane = pane
+			lastPane, lastChange = pane, time.Now()
 			select { // live view only: drop a frame rather than stall the run when nobody reads
 			case out <- StatusUpdate{ProjectName: name, Status: "running", Screen: pane}:
 			default:
 			}
 		}
 		if strings.Contains(pane, "trust this folder") || strings.Contains(pane, "Adding a new directory") {
-			fail(fmt.Sprintf("Claude does not trust %s (or %s) yet. Run `claude` once in that folder, accept the prompt, then retry.", path, outDir))
-			return
+			return claudeResult{}, fmt.Errorf("Claude does not trust %s (or %s) yet. Run `claude` once in that folder, accept the prompt, then retry", path, outDir)
 		}
 		if !notifiedPrompt && strings.Contains(pane, "requires approval") {
 			notifiedPrompt = true
-			send("running", "Claude is waiting for approval",
-				fmt.Sprintf("A command is not in claude_allowed_tools. Take over: %s\n", AttachCommand(name)))
+			out <- StatusUpdate{ProjectName: name, Status: "running", Command: "Claude is waiting for approval",
+				Output: fmt.Sprintf("A command is not in claude_allowed_tools. Take over: %s\n", AttachCommand(name))}
 		}
-		if st, err := os.Stat(turnFile); err == nil && st.ModTime().After(notifiedTurn) {
-			notifiedTurn = st.ModTime()
-			send("running", "Claude stopped without a result",
-				fmt.Sprintf("Probably waiting for input. Take over: %s\n", AttachCommand(name)))
+		if st, err := os.Stat(turnFile); err == nil && st.ModTime().After(turnSeen) {
+			turnSeen = st.ModTime()
+			if m := limitHit(pane); m != "" {
+				return claudeResult{}, errors.New("Claude stopped on a usage or rate limit (" + m + "); retry later")
+			}
+			out <- StatusUpdate{ProjectName: name, Status: "running", Command: "Claude stopped without a result",
+				Output: fmt.Sprintf("Probably waiting for input. Take over: %s\n", AttachCommand(name))}
+		}
+		// ended its turn without a result and nothing has happened since: nobody is coming back to it
+		if !turnSeen.IsZero() && time.Since(lastChange) > stallAfter && time.Since(turnSeen) > stallAfter {
+			return claudeResult{}, fmt.Errorf("Claude stopped without a result and stayed idle for %s", stallAfter)
 		}
 	}
+}
+
+// limitHit returns the first usage or rate limit message on the last lines of the screen, if any.
+func limitHit(pane string) string {
+	lines := strings.Split(strings.TrimRight(pane, "\n "), "\n")
+	if len(lines) > 15 {
+		lines = lines[len(lines)-15:]
+	}
+	tail := strings.Join(lines, "\n")
+	for _, m := range limitMarkers {
+		if strings.Contains(tail, m) {
+			return m
+		}
+	}
+	return ""
+}
+
+// runClaude runs a session for a task that needs no pipeline around it (resolving merge conflicts) and reports
+// it as one success or failure.
+func runClaude(ctx context.Context, name, path string, out chan<- StatusUpdate, promptTmpl string, extra ...string) {
+	_, _, resultFile, err := runPaths(name)
+	if err == nil {
+		var r claudeResult
+		r, err = claudeSession(ctx, name, path, fillPrompt(promptTmpl, name, path, "", "", resultFile, extra...), "conflicts", out)
+		if err == nil {
+			status := "success"
+			if r.Status != "success" {
+				status = "failed"
+			}
+			out <- StatusUpdate{ProjectName: name, Status: status, Command: "Claude session", Output: r.Summary}
+			return
+		}
+	}
+	status := "failed"
+	if ctx.Err() != nil {
+		status = "cancelled"
+	}
+	out <- StatusUpdate{ProjectName: name, Status: status, Command: "Claude session", Output: err.Error()}
 }

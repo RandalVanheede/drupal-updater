@@ -233,6 +233,17 @@ func LoadConfig(path string) (*Config, error) {
 	if cfg.MaxConcurrent <= 0 {
 		cfg.MaxConcurrent = 3
 	}
+	// A custom prompt from before 1.4 describes every step itself, while the app now runs the fixed steps: drop it,
+	// so the built-in prompt is used and the next save leaves it out.
+	if cfg.ClaudePrompt != "" && !strings.Contains(cfg.ClaudePrompt, "{{update_list}}") {
+		backup := path + ".claude_prompt.bak"
+		if err := os.WriteFile(backup, []byte(cfg.ClaudePrompt), 0o600); err == nil {
+			logging.Info("claude_prompt predates the app running the fixed update steps; using the built-in prompt (the old one is in %s)", backup)
+		} else {
+			logging.Info("claude_prompt predates the app running the fixed update steps; using the built-in prompt (backup failed: %v)", err)
+		}
+		cfg.ClaudePrompt = ""
+	}
 
 	return &cfg, nil
 }

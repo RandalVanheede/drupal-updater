@@ -239,7 +239,7 @@ func cmdStartUpdate(args []string) {
 	// Shared fan-in channel — all executor goroutines write here.
 	outChan := make(chan executor.StatusUpdate, len(jobs)*64)
 
-	maxConcurrent := cfg.MaxConcurrent
+	maxConcurrent := executor.ConcurrencyCap(cfg.MaxConcurrent)
 	if maxConcurrent <= 0 {
 		maxConcurrent = 3
 	}

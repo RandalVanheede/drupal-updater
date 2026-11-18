@@ -136,26 +136,30 @@ The project list shows each project's installed Drupal core version with a marke
 
 ## Claude runner
 
-Each project's update runs in a detached tmux session (`du-<project>`) with `claude --model sonnet`.
-The app only starts the session, waits for `~/.config/drupal-updater/runs/<project>/out/result.json`, verifies the
-repo is on the temp branch, and cleans up on failure. Attach with `tmux -L drupal-updater attach -t du-<project>` (private tmux socket; tmux is bundled in the .app by `scripts/bundle-tmux.sh`).
+A run has three parts.
+
+1. **The app prepares**, in Go: checks out the start branch (stashing local changes), pulls, creates the temp branch, starts ddev (unless it already runs), `ddev composer install` and `ddev drush deploy -y`. It then lists what there is to do: `composer audit` in disaster mode, `composer outdated --minor-only` in standard mode. **Nothing to do means the project is skipped**: no Claude session, back on the start branch, status "Skipped". Otherwise it takes a baseline smoke test of the site.
+2. **Claude updates**, in a detached tmux session (`du-<project>`, `claude --model sonnet`), with that list in its prompt. A fixed step that failed is handed over too, with its output, so Claude finishes it first.
+3. **The app checks**, in Go: `ddev drush updb -y` and `cex -y`, no pending database updates or config changes, the same smoke test again, and new Error-level log entries. Problems go back to Claude in a repair session (at most two); if they remain, the run fails. An update that did not change `composer.lock` is reported as skipped. Finally ddev is stopped, unless it was running before.
+
+A failed or cancelled run returns the project to its start branch; committed work is kept on a `drupal-updater/failed-*` branch and uncommitted work is stashed. The failure is saved and given to the next attempt; the summary of a successful run is saved for merge requests after a restart. A session that stops on a usage or rate limit fails at once, one that sits idle without a result for ten minutes fails too. At most one project per 2.5 GiB of Docker memory runs at the same time, whatever `max_concurrent` says. Attach with `tmux -L drupal-updater attach -t du-<project>` (private tmux socket; tmux is bundled in the .app by `scripts/bundle-tmux.sh`).
 
 ```yaml
 update_mode: standard           # or "disaster"; toggle on the project screen (desktop) or with `m` (TUI)
 claude_model: sonnet            # always passed via --model
 claude_prompt: "..."            # template; default is executor.DefaultClaudePrompt
-                                # placeholders: {{project}} {{path}} {{start_branch}} {{temp_branch}} {{ignored_packages}} {{smoke_paths}} {{project_instructions}} {{updates}} {{result_file}}
+                                # placeholders: {{project}} {{path}} {{start_branch}} {{temp_branch}} {{setup}} {{update_list}} {{previous_failure}} {{ignored_packages}} {{project_instructions}} {{updates}} {{result_file}}
 claude_allowed_tools: []        # default: all tools (Read Grep Glob Edit Write Bash WebFetch WebSearch)
 claude_permission_mode: dontAsk # unlisted tools are denied, never prompt
 claude_timeout_minutes: 60
 ```
 
-The default prompt updates core/symfony/twig within their constraints, then fixes every security advisory `composer audit` reports (Drupal core, contrib and other packages) that needs no major upgrade: core may move to a newer minor (10.3 → 10.5) but never a new major, other packages stay on their installed major. Skipped advisories are listed with their reason in the result summary.
-That is `update_mode: disaster`. The default, `update_mode: standard`, runs a plain `composer update --with-all-dependencies` within the existing constraints and pins back any package that jumped a major (loose constraints such as `*`), so only minor and patch updates land.
+`update_mode: disaster` fixes every security advisory `composer audit` reports (Drupal core, contrib and other packages) that needs no major upgrade, and nothing else: core may move to a newer minor (10.3 → 10.5) when an advisory needs it, never to a new major. Skipped advisories are listed with their reason in the result summary, and the app adds the advisories still open.
+The default, `update_mode: standard`, updates core, Symfony and Twig, then runs a plain `composer update --with-all-dependencies` within the existing constraints and pins back any package that jumped a major (loose constraints such as `*`), so only minor and patch updates land.
 
 On success the result also lists the production packages that changed in `composer.lock`, as a Markdown table like `composer-lock-diff --no-links --only-prod --md` (built in, no PHP needed on the host).
 
-Around the update the agent smoke-tests the site: once before updating (baseline) and once after `cex`, with the same checks: Drupal bootstraps, anonymous pages (`/`, `/user/login`, newest node per content type, search, a 404) and admin pages (content, structure, config, node add forms, status report) return 200 without PHP errors, no new Error-level log entries, no pending config. Only checks that passed before and fail after count as regressions; the agent fixes them or rolls back the causing package, and fails the run if one remains. Add project-specific paths per project:
+The smoke test is run by the app, before and after the update, with the same checks: Drupal bootstraps and `drush cr` works, anonymous pages (`/`, `/user/login`, the newest node of each content type, a 404) and admin pages (content, structure, config, node add forms, status report, through a `drush uli` login) answer without errors, and no new Error-level log entries appear. It talks to the site over ddev's local http URL. Only checks that passed before and fail after count as regressions. Add project-specific paths per project:
 
 ```yaml
 projects:
@@ -163,7 +167,7 @@ projects:
     smoke_paths: [/nl/contact, "admin:/admin/structure/webform"]   # admin: = checked while logged in
 ```
 
-Flows that need more than loading a page belong in the project's own repo, in `AGENTS.md` (the open standard for coding-agent instructions; `CLAUDE.md` is read when there is no `AGENTS.md`). The agent reads it before starting and runs its testing section at both smoke-test steps, e.g.:
+Flows that need more than loading a page belong in the project's own repo, in `AGENTS.md` (the open standard for coding-agent instructions; `CLAUDE.md` is read when there is no `AGENTS.md`). The agent reads it before starting and follows it while updating and repairing, e.g.:
 
 ```markdown
 ## Smoke tests

@@ -58,19 +58,19 @@
   .add-row input {
     flex: 1; min-width: 0;
     background: var(--surface); border: 1px solid var(--border-strong); color: var(--text);
-    padding: 8px 10px; border-radius: var(--radius); font-family: var(--font-body); font-size: 0.85rem;
+    padding: 8px 10px; border-radius: var(--radius); font-family: var(--font-body); font-size: var(--fs0);
   }
   .add-row input:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus) 30%, transparent); }
   .add-row input::placeholder { color: var(--text-muted); opacity: 0.8; }
   .entries { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); overflow: hidden; }
   li { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--border); }
   li:last-child { border-bottom: none; }
-  .value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 0.82rem var(--font-mono); direction: rtl; text-align: left; }
-  .rank { flex: none; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; color: var(--accent); min-width: 5.5rem; }
-  .icon { flex: none; width: 1.8rem; height: 1.8rem; display: grid; place-items: center; background: none; border: 0; border-radius: 6px; color: var(--text-muted); font-size: 0.7rem; cursor: pointer; }
+  .value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--fs0) var(--font-mono); direction: rtl; text-align: left; }
+  .rank { flex: none; font-size: var(--fs-1); font-weight: 700; color: var(--accent); min-width: 5.5rem; }
+  .icon { flex: none; width: 1.8rem; height: 1.8rem; display: grid; place-items: center; background: none; border: 0; border-radius: 6px; color: var(--text-muted); font-size: var(--fs-1); cursor: pointer; }
   .icon:hover:not(:disabled) { background: var(--hover); color: var(--text); }
   .icon:disabled { opacity: 0.3; cursor: default; }
-  .remove { font-size: 0.85rem; }
+  .remove { font-size: var(--fs0); }
   .remove:hover:not(:disabled) { background: var(--danger-bg); color: var(--danger); }
-  .empty-note { margin: 0; font-size: 0.8rem; font-weight: 400; color: var(--text-muted); }
+  .empty-note { margin: 0; font-size: var(--fs0); font-weight: 400; color: var(--text-muted); }
 </style>

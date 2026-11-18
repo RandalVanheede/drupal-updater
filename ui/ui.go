@@ -642,7 +642,7 @@ func (m *model) applyUpdate(msg executor.StatusUpdate) {
 	} else {
 		m.logs[msg.ProjectName] += "$ " + msg.Command + "\n"
 	}
-	if msg.Status == "success" || msg.Status == "failed" || msg.Status == "cancelled" {
+	if msg.Status == "success" || msg.Status == "failed" || msg.Status == "cancelled" || msg.Status == "skipped" {
 		m.doneJobs++
 	}
 }
@@ -820,7 +820,7 @@ func (m *model) retryFailed() tea.Cmd {
 	m.cancelAll = cancelAll
 	m.cancels = make(map[string]context.CancelFunc)
 
-	sem := make(chan struct{}, m.cfg.MaxConcurrent)
+	sem := make(chan struct{}, executor.ConcurrencyCap(m.cfg.MaxConcurrent))
 	for _, pName := range retryProjects {
 		m.status[pName] = "idle"
 		m.logs[pName] = ""
@@ -1042,7 +1042,7 @@ func (m *model) startExecution() {
 		jobs = append(jobs, job{name: p.Name, path: p.Path, startBranch: pCfg.GitStartBranch, tempBranch: tempBranch})
 	}
 
-	sem := make(chan struct{}, m.cfg.MaxConcurrent)
+	sem := make(chan struct{}, executor.ConcurrencyCap(m.cfg.MaxConcurrent))
 	for _, j := range jobs {
 		j := j
 		ctx, cancel := context.WithCancel(parentCtx)
@@ -1181,6 +1181,8 @@ func (m *model) View() string {
 				statusStr = statusFailedStyle.Render("✗ FAILED ")
 			case "cancelled":
 				statusStr = statusIdleStyle.Render("◌ CANCEL ")
+			case "skipped":
+				statusStr = statusSuccessStyle.Render("– SKIPPED")
 			default:
 				statusStr = statusIdleStyle.Render("○ IDLE   ")
 			}
@@ -1217,6 +1219,8 @@ func (m *model) View() string {
 			statusStr = statusFailedStyle.Render("✗ FAILED")
 		case "cancelled":
 			statusStr = statusIdleStyle.Render("◌ CANCELLED")
+		case "skipped":
+			statusStr = statusSuccessStyle.Render("– SKIPPED (nothing to update)")
 		default:
 			statusStr = statusIdleStyle.Render("○ IDLE")
 		}
@@ -1247,6 +1251,8 @@ func (m *model) View() string {
 				statusStr = statusFailedStyle.Render("✗")
 			case "cancelled":
 				statusStr = statusIdleStyle.Render("◌")
+			case "skipped":
+				statusStr = statusSuccessStyle.Render("–")
 			default:
 				statusStr = statusIdleStyle.Render("○")
 			}
