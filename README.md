@@ -66,6 +66,8 @@ git_merge_target: develop            # merge request target, default: the start 
 git_commit_message: "Drupal updates {date}"
 ignored_packages: [drupal/some-module]
 smoke_paths: [/contact, "admin:/admin/commerce"]
+multisite: on                        # drush deploy/updb/cex and the smoke test per site ddev reaches (--uri);
+                                     # off (default): only the site in .drush_subsite, or default
 claude_instructions: |
   Never update the search_api_solr config.
 ```
@@ -147,8 +149,9 @@ A failed or cancelled run returns the project to its start branch; committed wor
 ```yaml
 update_mode: standard           # or "disaster"; toggle on the project screen (desktop) or with `m` (TUI)
 claude_model: sonnet            # always passed via --model
-claude_prompt: "..."            # template; default is executor.DefaultClaudePrompt
-                                # placeholders: {{project}} {{path}} {{start_branch}} {{temp_branch}} {{setup}} {{update_list}} {{previous_failure}} {{ignored_packages}} {{project_instructions}} {{updates}} {{result_file}}
+claude_prompt: "..."            # template; default is executor.DefaultClaudePrompt. When a new version changes
+                                # the built-in prompt, the desktop app shows both and lets you merge them
+                                # placeholders: {{project}} {{path}} {{start_branch}} {{temp_branch}} {{setup}} {{update_list}} {{sites}} {{previous_failure}} {{ignored_packages}} {{project_instructions}} {{updates}} {{result_file}}
 claude_allowed_tools: []        # default: all tools (Read Grep Glob Edit Write Bash WebFetch WebSearch)
 claude_permission_mode: dontAsk # unlisted tools are denied, never prompt
 claude_timeout_minutes: 60

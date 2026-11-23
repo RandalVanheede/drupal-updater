@@ -29,19 +29,43 @@ const (
 // around it (checkout, ddev start, composer install, drush deploy before; drush updb and cex, checks and ddev stop
 // after) and fills in what it found. Placeholders: {{project}} {{path}} {{start_branch}} {{temp_branch}}
 // {{setup}} {{update_list}} {{previous_failure}} {{ignored_packages}} {{project_instructions}} {{result_file}}
-// and {{updates}} (the update_mode rules).
+// {{sites}} (see sitesText) and {{updates}} (the update_mode rules). Changing it makes users with a custom prompt
+// merge theirs with it (PromptBase).
 const DefaultClaudePrompt = `You are updating the Drupal project "{{project}}" located at {{path}} (your working directory). Work fully autonomously: nobody is watching, so never ask questions.
 
 Branches: start branch {{start_branch}}, temp branch {{temp_branch}}. All work happens on the temp branch.
 
 What the app already did: {{setup}}
 
+Sites: {{sites}}
+
 Project notes: if the repository has an AGENTS.md (or else a CLAUDE.md), read it before starting and follow it where it doesn't conflict with this task. Flows in its testing / smoke test section are not covered by the app's checks: carry them out (with curl and drush) after updating and fix what the update broke.
 {{previous_failure}}
-Your task: apply the updates, then stop. Afterwards the app runs ddev drush updb and cex, checks that no database updates or config changes are pending, compares the site with the baseline it took before you started (anonymous and admin pages, recent errors in the log) and, if something regressed, starts another session to fix it. You don't need to do those steps yourself, but check that the site still boots (ddev drush status) when you change a lot.
+Your task: apply the updates, then stop. Afterwards the app runs ddev drush updb and cex for every site above, checks that no database updates or config changes are pending, compares the site with the baseline it took before you started (anonymous and admin pages, recent errors in the log) and, if something regressed, starts another session to fix it. You don't need to do those steps yourself, but check that the site still boots (ddev drush status) when you change a lot.
 
 Updates found by the app before you started:
 {{update_list}}
+
+Vendor hardening, before the updates below: drupal/core-vendor-hardening must be installed in every project. Check composer.json and ddev composer show drupal/core-vendor-hardening.
+- If it is missing (or only in require-dev): first allow the plugin with ddev composer config --no-plugins allow-plugins.drupal/core-vendor-hardening true, then ddev composer require 'drupal/core-vendor-hardening:<same constraint as drupal/core-recommended or drupal/core in composer.json>' --no-update. The core update below ('drupal/core-*' matches it) then installs it together with core, so its version always equals core. When this run does not update core, install it on its own at the installed core version: ddev composer update drupal/core-vendor-hardening --with 'drupal/core-vendor-hardening:<installed drupal/core version>'.
+- If it is installed but allow-plugins sets it to false or does not list it: set it to true, so the plugin actually runs.
+- composer.json must contain this in its "extra" section (before the composer updates):
+    "drupal-core-vendor-hardening": {
+        "drupal/core": [
+            "install.php",
+            "CHANGELOG.txt",
+            "COPYRIGHT.txt",
+            "INSTALL.mysql.txt",
+            "INSTALL.pgsql.txt",
+            "INSTALL.sqlite.txt",
+            "INSTALL.txt",
+            "LICENSE.txt",
+            "MAINTAINERS.txt",
+            "UPDATE.txt",
+            "USAGE.txt"
+        ]
+    }
+  If the key is missing, add it. If it exists, add only the entries that are missing from the "drupal/core" list and keep every existing entry and every other package key unchanged. Edit composer.json directly, keep its existing indentation and key order, and change nothing else in it. Then run ddev composer validate --no-check-publish and, if composer.lock is now out of date (content-hash), ddev composer update --lock.
 
 {{updates}}
 Packages that must NOT be updated: {{ignored_packages}}
@@ -75,6 +99,8 @@ An earlier session updated the dependencies and reported:
 After that the app ran ddev drush updb -y and ddev drush cex -y and checked the site against a baseline taken before the update. These problems remain:
 {{problems}}
 
+Sites: {{sites}}
+
 For each problem: find the cause (page output, ddev drush ws, logs) and fix it when the update caused it (cache, config import, update hook, patch, constraint). If you can't, roll back only the package that causes it (ddev composer require '<package>:<old version>' or revert its lines in composer.json/composer.lock and run ddev composer install), as with a skipped security fix. You may run ddev drush updb, cex and cr yourself while fixing; the app checks everything again afterwards.
 
 Packages that must NOT be updated: {{ignored_packages}}
@@ -88,10 +114,10 @@ Stay on branch {{temp_branch}} when you write it.`
 
 // The update rules of DefaultClaudePrompt per update_mode, filled in as {{updates}}.
 const (
-	disasterUpdates = `Updates, disaster mode: security fixes only. Do not update anything that has no advisory, core included. Goal: fix every security advisory that can be fixed without a major upgrade.
+	disasterUpdates = `Updates, disaster mode: security fixes only. Do not update anything that has no advisory, core included (adding drupal/core-vendor-hardening as described above is the one exception). Goal: fix every security advisory that can be fixed without a major upgrade.
 - Find advisories with ddev composer audit --format=json (it covers drupal/* and all other Composer packages). Cross-check Drupal ones with ddev drush pm:security if that command exists.
 - "Major" is the first version number as Composer sees it. Drupal contrib "8.x-1.5" is 1.5.0 to Composer, so 8.x-1.x and 1.x are the same major; 1.x to 2.x is a major upgrade.
-- Drupal core first, because contrib fixes may need a newer core minor: move drupal/core and its companions (drupal/core-recommended, drupal/core-composer-scaffold, drupal/core-project-message, and drupal/core-dev if required) together to the lowest fixed release within the installed major. A minor bump (e.g. 10.3 to 10.5) is fine; a new major (10 to 11) never.
+- Drupal core first, because contrib fixes may need a newer core minor: move drupal/core and its companions (drupal/core-recommended, drupal/core-composer-scaffold, drupal/core-project-message, drupal/core-vendor-hardening, and drupal/core-dev if required) together to the lowest fixed release within the installed major. A minor bump (e.g. 10.3 to 10.5) is fine; a new major (10 to 11) never.
 - Then every other affected package (contrib modules, themes, libraries such as guzzlehttp/*): the lowest fixed version within the installed major. Use ddev composer update <package> --with-all-dependencies when composer.json allows it; otherwise widen the constraint within the same major with ddev composer require '<package>:^<x.y>' --with-all-dependencies.
 - Skip an advisory, and keep going with the rest, when the fix needs: a new major of the package, a new major of Drupal core (directly or through its dependencies), a newer PHP than the project runs, or an update of a package listed below as not to be updated. Never use --ignore-platform-reqs. Never move core to a new major.
 - If one package's fix conflicts, revert just that change (git checkout -- composer.json composer.lock, then redo the others) rather than giving up on all of them.
@@ -106,6 +132,18 @@ const (
 // The agent works autonomously with every tool; the hard limits live in claudeDenied and in the
 // git/ddev guard shims (guard.go), which also catch forms these globs miss.
 var defaultClaudeAllowed = []string{"Read", "Grep", "Glob", "Edit", "Write", "Bash", "WebFetch", "WebSearch"}
+
+// PromptBase identifies the current built-in prompt. A custom claude_prompt records the one it was written against
+// (claude_prompt_base); when they differ, the desktop app asks the user to merge the two.
+func PromptBase() string {
+	h := sha256.Sum256([]byte(DefaultClaudePrompt))
+	return hex.EncodeToString(h[:6])
+}
+
+// PromptOutdated reports whether a custom prompt was written against an older built-in prompt.
+func PromptOutdated(cfg *config.Config) bool {
+	return cfg.ClaudePrompt != "" && cfg.ClaudePromptBase != PromptBase()
+}
 
 // ClaudeDefaults exposes the built-in prompt and allowlist for settings screens.
 func ClaudeDefaults() (prompt string, allowedTools []string) {
@@ -142,6 +180,9 @@ func Configure(cfg *config.Config) {
 	c := &claudeCfg
 	c.model = orDefault(cfg.ClaudeModel, defaultClaudeModel)
 	c.prompt = orDefault(cfg.ClaudePrompt, DefaultClaudePrompt)
+	if PromptOutdated(cfg) {
+		logging.Info("claude_prompt was written for an older built-in prompt; it is still used. Open Settings in the desktop app to merge it with the new one.")
+	}
 	c.updates = standardUpdates
 	c.disaster = cfg.UpdateMode == "disaster"
 	if c.disaster {

@@ -51,26 +51,18 @@ func localClient(jar http.CookieJar) *http.Client {
 
 // smoke checks the site the way a person would before and after an update: drush boots, the main anonymous and
 // admin pages answer without errors, an unknown path gives 404, and the newest Error-level log entry.
-func smoke(ctx context.Context, run runner, extra []string) smokeReport {
+func smoke(ctx context.Context, run runner, s site, extra []string) smokeReport {
 	var rep smokeReport
 	add := func(name string, ok bool, detail string) {
 		rep.Checks = append(rep.Checks, smokeCheck{name, ok, detail})
 	}
 
-	raw, err := run(ctx, time.Minute, "ddev", "describe", "-j")
-	base := ""
-	if err == nil {
-		var d struct {
-			Raw struct {
-				HTTP    string `json:"httpurl"`
-				Primary string `json:"primary_url"`
-			} `json:"raw"`
-		}
-		if json.Unmarshal([]byte(lastJSON(raw)), &d) == nil {
-			base = strings.TrimRight(d.Raw.HTTP, "/")
-			if base == "" {
-				base = strings.TrimRight(d.Raw.Primary, "/")
-			}
+	base := s.URL
+	if base == "" {
+		info, _ := describe(ctx, run)
+		base = info.HTTP
+		if base == "" {
+			base = info.Primary
 		}
 	}
 	u, perr := url.Parse(base)
@@ -79,9 +71,9 @@ func smoke(ctx context.Context, run runner, extra []string) smokeReport {
 		return rep
 	}
 
-	out, err := run(ctx, 2*time.Minute, "ddev", "drush", "status", "--field=bootstrap")
+	out, err := run(ctx, 2*time.Minute, s.drush("status", "--field=bootstrap")...)
 	add("drush status", err == nil && strings.Contains(out, "Successful"), firstLine(out))
-	_, err = run(ctx, 5*time.Minute, "ddev", "drush", "cr")
+	_, err = run(ctx, 5*time.Minute, s.drush("cr")...)
 	add("drush cr", err == nil, "")
 
 	anon := localClient(nil)
@@ -95,8 +87,8 @@ func smoke(ctx context.Context, run runner, extra []string) smokeReport {
 
 	// newest published node of each content type, so every node template renders once
 	types := map[string]int{}
-	if out, err := run(ctx, 2*time.Minute, "ddev", "drush", "php:eval",
-		`$o=[];if(\Drupal::moduleHandler()->moduleExists('node')){foreach(\Drupal::entityTypeManager()->getStorage('node_type')->loadMultiple() as $t){$i=\Drupal::entityQuery('node')->accessCheck(FALSE)->condition('type',$t->id())->condition('status',1)->sort('nid','DESC')->range(0,1)->execute();$o[$t->id()]=$i?(int)reset($i):0;}}echo json_encode($o);`); err == nil {
+	if out, err := run(ctx, 2*time.Minute, s.drush("php:eval",
+		`$o=[];if(\Drupal::moduleHandler()->moduleExists('node')){foreach(\Drupal::entityTypeManager()->getStorage('node_type')->loadMultiple() as $t){$i=\Drupal::entityQuery('node')->accessCheck(FALSE)->condition('type',$t->id())->condition('status',1)->sort('nid','DESC')->range(0,1)->execute();$o[$t->id()]=$i?(int)reset($i):0;}}echo json_encode($o);`)...); err == nil {
 		json.Unmarshal([]byte(lastJSON(out)), &types)
 	}
 	names := make([]string, 0, len(types))
@@ -117,7 +109,7 @@ func smoke(ctx context.Context, run runner, extra []string) smokeReport {
 	jar, _ := cookiejar.New(nil)
 	admin := localClient(jar)
 	loggedIn := false
-	if out, err := run(ctx, 2*time.Minute, "ddev", "drush", "uli", "--no-browser"); err == nil {
+	if out, err := run(ctx, 2*time.Minute, s.drush("uli", "--no-browser")...); err == nil {
 		if link := strings.TrimSpace(lastLine(out)); strings.HasPrefix(link, "http") {
 			if l, err := url.Parse(link); err == nil {
 				l.Scheme, l.Host = u.Scheme, u.Host // drush may not know the site's own URL
@@ -146,7 +138,7 @@ func smoke(ctx context.Context, run runner, extra []string) smokeReport {
 		}
 	}
 
-	if out, err := run(ctx, 2*time.Minute, "ddev", "drush", "watchdog:show", "--severity=Error", "--count=1", "--format=json"); err == nil {
+	if out, err := run(ctx, 2*time.Minute, s.drush("watchdog:show", "--severity=Error", "--count=1", "--format=json")...); err == nil {
 		var rows []struct {
 			Wid json.Number `json:"wid"`
 		}
@@ -202,8 +194,8 @@ func regressions(before, after smokeReport) (broken, preexisting []string) {
 }
 
 // newErrors lists Error-level log entries written after the baseline.
-func newErrors(ctx context.Context, run runner, since int) []string {
-	out, err := run(ctx, 2*time.Minute, "ddev", "drush", "watchdog:show", "--severity=Error", "--count=20", "--format=json")
+func newErrors(ctx context.Context, run runner, s site, since int) []string {
+	out, err := run(ctx, 2*time.Minute, s.drush("watchdog:show", "--severity=Error", "--count=20", "--format=json")...)
 	if err != nil {
 		return nil
 	}

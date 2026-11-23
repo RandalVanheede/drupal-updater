@@ -12,6 +12,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// PromptBackupPath is where LoadConfig keeps a claude_prompt from before 1.4 that it stopped using.
+func PromptBackupPath(configPath string) string { return configPath + ".claude_prompt.bak" }
+
 // ProjectFile is the per-project config committed in the project's repo, shared by the whole team.
 // YAML is a superset of JSON, so a JSON body works too.
 const ProjectFile = "drupal-updater.yaml"
@@ -28,6 +31,7 @@ type ProjectConfig struct {
 	GitMergeTarget      string   `yaml:"git_merge_target,omitempty" json:"GitMergeTarget"`        // merge request target; default: the start branch
 	GitCommitMessage    string   `yaml:"git_commit_message,omitempty" json:"GitCommitMessage"`    // commit made before the merge request; {date} = YYYY-MM-DD
 	DashboardProject    string   `yaml:"dashboard_project,omitempty" json:"DashboardProject"`     // this project's name (or id) in the applications dashboard, when it differs from the folder name
+	Multisite           string   `yaml:"multisite,omitempty" json:"Multisite"`                    // "on": update every local site with drush --uri; "off"/empty: only .drush_subsite or default
 }
 
 type Config struct {
@@ -39,6 +43,7 @@ type Config struct {
 	UpdateMode           string                   `yaml:"update_mode,omitempty" json:"UpdateMode"`     // "standard" (default, all minor/patch updates) or "disaster" (security fixes only)
 	ClaudeModel          string                   `yaml:"claude_model,omitempty" json:"ClaudeModel"`   // default sonnet
 	ClaudePrompt         string                   `yaml:"claude_prompt,omitempty" json:"ClaudePrompt"` // default: executor.DefaultClaudePrompt
+	ClaudePromptBase     string                   `yaml:"claude_prompt_base,omitempty" json:"ClaudePromptBase"` // executor.PromptBase() of the built-in prompt claude_prompt was written against
 	ClaudeAllowedTools   []string                 `yaml:"claude_allowed_tools,omitempty" json:"ClaudeAllowedTools"`
 	ClaudePermissionMode string                   `yaml:"claude_permission_mode,omitempty" json:"ClaudePermissionMode"` // default dontAsk
 	ClaudeTimeoutMinutes int                      `yaml:"claude_timeout_minutes,omitempty" json:"ClaudeTimeoutMinutes"` // default 60
@@ -111,6 +116,7 @@ func overlay(dst *ProjectConfig, src ProjectConfig) {
 	pick(&dst.GitMergeTarget, src.GitMergeTarget)
 	pick(&dst.GitCommitMessage, src.GitCommitMessage)
 	pick(&dst.DashboardProject, src.DashboardProject)
+	pick(&dst.Multisite, src.Multisite)
 	if src.IgnoredPackages != nil {
 		dst.IgnoredPackages = src.IgnoredPackages
 	}
@@ -236,7 +242,7 @@ func LoadConfig(path string) (*Config, error) {
 	// A custom prompt from before 1.4 describes every step itself, while the app now runs the fixed steps: drop it,
 	// so the built-in prompt is used and the next save leaves it out.
 	if cfg.ClaudePrompt != "" && !strings.Contains(cfg.ClaudePrompt, "{{update_list}}") {
-		backup := path + ".claude_prompt.bak"
+		backup := PromptBackupPath(path)
 		if err := os.WriteFile(backup, []byte(cfg.ClaudePrompt), 0o600); err == nil {
 			logging.Info("claude_prompt predates the app running the fixed update steps; using the built-in prompt (the old one is in %s)", backup)
 		} else {

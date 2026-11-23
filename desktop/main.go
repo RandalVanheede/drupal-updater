@@ -472,12 +472,82 @@ func (a *App) GetClaudeDefaults() map[string]any {
 func (a *App) SaveConfig(cfg *config.Config) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	switch { // a prompt edited here is written against the built-in prompt this version shows
+	case cfg.ClaudePrompt == "":
+		cfg.ClaudePromptBase = ""
+	case cfg.ClaudePrompt != a.cfg.ClaudePrompt:
+		cfg.ClaudePromptBase = executor.PromptBase()
+	}
 	a.cfg = cfg
 	if a.pending == 0 {
 		a.sem = nil // rebuilt with the new max_concurrent on next start
 	}
 	executor.Configure(cfg) // apply Claude settings without a restart
 	return config.SaveConfig(a.configPath, cfg)
+}
+
+// PromptMerge is a custom Claude prompt that needs merging with a changed built-in prompt. Source is "custom"
+// (claude_prompt written against an older built-in prompt) or "backup" (a pre-1.4 prompt LoadConfig set aside).
+type PromptMerge struct {
+	Mine   string `json:"mine"`
+	Theirs string `json:"theirs"`
+	Source string `json:"source"`
+}
+
+// GetPromptMerge returns the merge the user still has to make, or nil.
+func (a *App) GetPromptMerge() *PromptMerge { return a.promptMerge(a.config()) }
+
+func (a *App) promptMerge(cfg *config.Config) *PromptMerge {
+	def, _ := executor.ClaudeDefaults()
+	if executor.PromptOutdated(cfg) {
+		return &PromptMerge{cfg.ClaudePrompt, def, "custom"}
+	}
+	if cfg.ClaudePrompt == "" {
+		if b, err := os.ReadFile(config.PromptBackupPath(a.configPath)); err == nil && strings.TrimSpace(string(b)) != "" {
+			return &PromptMerge{string(b), def, "backup"}
+		}
+	}
+	return nil
+}
+
+// ResolvePromptMerge saves the merged prompt as written against the current built-in prompt. A set-aside pre-1.4
+// prompt is kept, renamed, so the merge screen does not come back.
+func (a *App) ResolvePromptMerge(final string) error {
+	def, _ := executor.ClaudeDefaults()
+	if strings.TrimSpace(final) == strings.TrimSpace(def) {
+		final = ""
+	} else if !strings.Contains(final, "{{update_list}}") {
+		return fmt.Errorf("the prompt must contain {{update_list}}, or the app sets it aside again")
+	}
+	a.mu.Lock() // held from the check to the write, so a Settings save in between is not overwritten
+	m := a.promptMerge(a.cfg)
+	if m == nil {
+		a.mu.Unlock()
+		return nil
+	}
+	c := *a.cfg
+	c.ClaudePrompt, c.ClaudePromptBase = final, ""
+	if final != "" {
+		c.ClaudePromptBase = executor.PromptBase()
+	}
+	if err := config.SaveConfig(a.configPath, &c); err != nil {
+		a.mu.Unlock()
+		return err
+	}
+	a.cfg = &c
+	executor.Configure(a.cfg)
+	a.mu.Unlock()
+	if m.Source == "backup" {
+		bak := config.PromptBackupPath(a.configPath)
+		dst := bak + ".merged"
+		if _, err := os.Stat(dst); err == nil { // never replace an earlier merged prompt
+			dst += "." + time.Now().Format("20060102-150405")
+		}
+		if err := os.Rename(bak, dst); err != nil {
+			logging.Error("keeping %s after the prompt merge: %v", bak, err)
+		}
+	}
+	return nil
 }
 
 // SetUpdateMode switches between "disaster" (security fixes only) and "standard" (all minor/patch updates)

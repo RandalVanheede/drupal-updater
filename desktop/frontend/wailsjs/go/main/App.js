@@ -58,6 +58,10 @@ export function GetConfigError() {
   return window['go']['main']['App']['GetConfigError']();
 }
 
+export function GetPromptMerge() {
+  return window['go']['main']['App']['GetPromptMerge']();
+}
+
 export function GetUpdate() {
   return window['go']['main']['App']['GetUpdate']();
 }
@@ -92,6 +96,10 @@ export function RefreshReleases() {
 
 export function RenameBranch(arg1, arg2) {
   return window['go']['main']['App']['RenameBranch'](arg1, arg2);
+}
+
+export function ResolvePromptMerge(arg1) {
+  return window['go']['main']['App']['ResolvePromptMerge'](arg1);
 }
 
 export function RetryProjects(arg1) {

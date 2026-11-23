@@ -162,6 +162,10 @@ func (cm *configModel) globalFields() []field {
 			if c.ClaudePrompt = v; strings.TrimSpace(v) == strings.TrimSpace(prompt) || strings.TrimSpace(v) == "" {
 				c.ClaudePrompt = ""
 			}
+			c.ClaudePromptBase = ""
+			if c.ClaudePrompt != "" {
+				c.ClaudePromptBase = executor.PromptBase() // written against the built-in prompt shown here
+			}
 		},
 		field{multi: true, show: func() string {
 			if c.ClaudePrompt != "" {
@@ -205,6 +209,15 @@ func (cm *configModel) projectFields(name string) []field {
 		str("Commit message", &pc.GitCommitMessage, inh.GitCommitMessage),
 		sl("Ignored packages", &pc.IgnoredPackages),
 		sl("Smoke-test paths", &pc.SmokePaths),
+		{label: "Multisite (on/off)", placeholder: orText(inh.Multisite, "off"),
+			get: func() string { return pc.Multisite },
+			set: func(v string) {
+				if v = strings.ToLower(strings.TrimSpace(v)); v != "on" && v != "off" {
+					v = ""
+				}
+				pc.Multisite = v
+				save()
+			}},
 		{label: "Claude instructions", multi: true, placeholder: "none",
 			get: func() string { return pc.ClaudeInstructions },
 			set: func(v string) { pc.ClaudeInstructions = strings.TrimSpace(v); save() }},
@@ -473,9 +486,9 @@ func (cm *configModel) View() string {
 		}
 		s.WriteString("\n")
 		effVals := []string{eff.GitStartBranch, eff.GitNewBranchPattern, orText(eff.GitMergeTarget, "the start branch"), eff.GitCommitMessage,
-			strings.Join(eff.IgnoredPackages, ", "), strings.Join(eff.SmokePaths, ", "), firstLine(eff.ClaudeInstructions)}
+			strings.Join(eff.IgnoredPackages, ", "), strings.Join(eff.SmokePaths, ", "), orText(eff.Multisite, "off"), firstLine(eff.ClaudeInstructions)}
 		locVals := []string{local.GitStartBranch, local.GitNewBranchPattern, orText(local.GitMergeTarget, "the start branch"), local.GitCommitMessage,
-			strings.Join(local.IgnoredPackages, ", "), strings.Join(local.SmokePaths, ", "), firstLine(local.ClaudeInstructions)}
+			strings.Join(local.IgnoredPackages, ", "), strings.Join(local.SmokePaths, ", "), orText(local.Multisite, "off"), firstLine(local.ClaudeInstructions)}
 		for i, f := range cm.projectFields(cm.editingProject) {
 			v := lipgloss.NewStyle().Foreground(dimWhite).Render(orText(effVals[i], "(none)"))
 			switch {

@@ -5,6 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"drupal-updater/config"
+	"drupal-updater/executor"
 )
 
 func TestNewAppKeepsUnreadableConfig(t *testing.T) {
@@ -136,5 +139,47 @@ func TestSafeDashURL(t *testing.T) {
 		if got := safeDashURL(raw, server); got != want {
 			t.Errorf("%q: got %q want %q", raw, got, want)
 		}
+	}
+}
+
+func TestPromptMerge(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	a := NewApp()
+	if a.GetPromptMerge() != nil {
+		t.Fatal("no custom prompt, nothing to merge")
+	}
+	// a custom prompt without a base (saved before 1.4.2) must be merged; editing it in Settings settles it
+	c := *a.config()
+	c.ClaudePrompt = "mine {{update_list}}"
+	a.cfg = &c
+	if m := a.GetPromptMerge(); m == nil || m.Source != "custom" || m.Mine != c.ClaudePrompt {
+		t.Fatalf("merge = %+v", m)
+	}
+	edited := c
+	edited.ClaudePrompt = "edited {{update_list}}"
+	if err := a.SaveConfig(&edited); err != nil || a.GetPromptMerge() != nil {
+		t.Fatalf("edited prompt still asks for a merge (err %v)", err)
+	}
+	// a pre-1.4 backup is offered when no custom prompt is set, and kept (renamed) once resolved
+	bak := config.PromptBackupPath(a.configPath)
+	os.WriteFile(bak, []byte("old prompt"), 0o600)
+	plain := *a.config()
+	plain.ClaudePrompt = ""
+	a.SaveConfig(&plain)
+	if m := a.GetPromptMerge(); m == nil || m.Source != "backup" {
+		t.Fatalf("backup merge = %+v", m)
+	}
+	if err := a.ResolvePromptMerge("no placeholder"); err == nil {
+		t.Fatal("a prompt without {{update_list}} must be refused")
+	}
+	if err := a.ResolvePromptMerge("final {{update_list}}"); err != nil {
+		t.Fatal(err)
+	}
+	if a.GetPromptMerge() != nil || a.config().ClaudePromptBase != executor.PromptBase() {
+		t.Fatal("resolved merge must be stamped with the current base")
+	}
+	if _, err := os.Stat(bak + ".merged"); err != nil {
+		t.Fatal("the backup must be kept as .merged")
 	}
 }

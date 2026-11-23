@@ -9,6 +9,7 @@ export namespace config {
 	    GitMergeTarget: string;
 	    GitCommitMessage: string;
 	    DashboardProject: string;
+	    Multisite: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ProjectConfig(source);
@@ -24,6 +25,7 @@ export namespace config {
 	        this.GitMergeTarget = source["GitMergeTarget"];
 	        this.GitCommitMessage = source["GitCommitMessage"];
 	        this.DashboardProject = source["DashboardProject"];
+	        this.Multisite = source["Multisite"];
 	    }
 	}
 	export class Config {
@@ -34,6 +36,7 @@ export namespace config {
 	    UpdateMode: string;
 	    ClaudeModel: string;
 	    ClaudePrompt: string;
+	    ClaudePromptBase: string;
 	    ClaudeAllowedTools: string[];
 	    ClaudePermissionMode: string;
 	    ClaudeTimeoutMinutes: number;
@@ -55,6 +58,7 @@ export namespace config {
 	        this.UpdateMode = source["UpdateMode"];
 	        this.ClaudeModel = source["ClaudeModel"];
 	        this.ClaudePrompt = source["ClaudePrompt"];
+	        this.ClaudePromptBase = source["ClaudePromptBase"];
 	        this.ClaudeAllowedTools = source["ClaudeAllowedTools"];
 	        this.ClaudePermissionMode = source["ClaudePermissionMode"];
 	        this.ClaudeTimeoutMinutes = source["ClaudeTimeoutMinutes"];
@@ -221,6 +225,22 @@ export namespace main {
 	        this.path = source["path"];
 	        this.repoFile = source["repoFile"];
 	        this.core = source["core"];
+	    }
+	}
+	export class PromptMerge {
+	    mine: string;
+	    theirs: string;
+	    source: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PromptMerge(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.mine = source["mine"];
+	        this.theirs = source["theirs"];
+	        this.source = source["source"];
 	    }
 	}
 	

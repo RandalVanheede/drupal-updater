@@ -1,6 +1,6 @@
 <script>
   import { onMount, tick } from 'svelte';
-  import { DashboardCandidates, DashboardState, DashboardSignIn, DashboardSignOut, DashboardInfo, PickFolder, PreviewProjects, GetConfigError, DiscoverProjects, CoreStatuses, RefreshCore, RefreshReleases, GetConfig, SaveConfig, StartUpdate, CancelProject, CancelAll, RenameBranch, CleanupBranch, RetryProjects, GetClaudeDefaults, SetUpdateMode, FinalBranch, SaveProjectFile, MergeRequest, GetVersion, GetUpdate, InstallUpdate } from '../wailsjs/go/main/App';
+  import { DashboardCandidates, DashboardState, DashboardSignIn, DashboardSignOut, DashboardInfo, PickFolder, PreviewProjects, GetConfigError, DiscoverProjects, CoreStatuses, RefreshCore, RefreshReleases, GetConfig, SaveConfig, StartUpdate, CancelProject, CancelAll, RenameBranch, CleanupBranch, RetryProjects, GetClaudeDefaults, SetUpdateMode, FinalBranch, SaveProjectFile, MergeRequest, GetVersion, GetUpdate, InstallUpdate, GetPromptMerge, ResolvePromptMerge } from '../wailsjs/go/main/App';
   import { EventsOn, BrowserOpenURL } from '../wailsjs/runtime/runtime';
   import Seg from './Seg.svelte';
   import Welcome from './Welcome.svelte';
@@ -10,6 +10,7 @@
   import DashPopover from './DashPopover.svelte';
   import RunResult from './RunResult.svelte';
   import Explain from './Explain.svelte';
+  import PromptMerge from './PromptMerge.svelte';
   import { FONTS, THEMES, SIZES, FONT_ITEMS, load } from './appearance.js';
   import { segKeys } from './keys.js';
 
@@ -202,8 +203,23 @@
       DashboardURL: loaded.DashboardURL || DASH_DEFAULT,
     };
     snapshot = configKey(config);
+    GetPromptMerge().then(m => { promptMerge = m; showMerge = !!m; }).catch(() => {});
     await loadProjects();
   });
+
+  // custom prompt vs a changed built-in prompt: merged in a dialog (now, or later from Settings)
+  let promptMerge = $state(null);
+  let showMerge = $state(false);
+  async function savePromptMerge(text) {
+    await ResolvePromptMerge(text); // throws with the reason, shown in the dialog
+    const clean = !dirty;
+    const l = await GetConfig();
+    config.ClaudePrompt = l.ClaudePrompt || claudeDefaults.prompt;
+    config.ClaudePromptBase = l.ClaudePromptBase;
+    if (clean) snapshot = configKey(config);
+    promptMerge = null;
+    showMerge = false;
+  }
 
   let coreStatus = $state({});
   const CORE_TITLE = {
@@ -351,6 +367,7 @@
     saveError = '';
     try {
       await SaveConfig(toSave);
+      promptMerge = await GetPromptMerge().catch(() => promptMerge); // editing the prompt here settles it
     } catch (e) {
       saveError = 'Could not save: ' + (e?.message || e);
       return;
@@ -463,6 +480,7 @@
 </script>
 
 {#if welcome}<Welcome bind:theme bind:font bind:fontSize ondone={finishWelcome} />{/if}
+{#if showMerge && promptMerge && !welcome}<PromptMerge merge={promptMerge} onsave={savePromptMerge} onlater={() => showMerge = false} />{/if}
 <Tour bind:this={tour} go={goTo} bind:active={tourActive} />
 
 <svelte:window onpointerdown={(e) => { if (pop?.pinned && !e.target.closest?.('.pop, .info')) closePop(); }} />
@@ -766,6 +784,7 @@
                   <dl>
                   <dt>{'{{setup}}'}</dt><dd>What the app already did before Claude starts (checkout, fetch, temp branch, ddev start, composer install, drush deploy), plus the output of the first step that failed, which Claude then finishes itself.</dd>
                   <dt>{'{{update_list}}'}</dt><dd>What there is to update, as found by the app: the open security advisories (disaster mode) or the minor and patch updates (standard mode). Required: a prompt without it is replaced by the built-in one.</dd>
+                  <dt>{'{{sites}}'}</dt><dd>The sites the app runs drush and its checks for: the default site, the subsite in <code>.drush_subsite</code>, or with Multisite on every site ddev reaches, with its URL for <code>--uri</code> (and the sites it had to skip).</dd>
                   <dt>{'{{updates}}'}</dt><dd>The update rules of the current update mode (disaster: security fixes only; standard: minor and patch updates, core first).</dd>
                   <dt>{'{{previous_failure}}'}</dt><dd>Why the previous run of this project failed, so it is not repeated; empty when the last run did not fail.</dd>
                   <dt>{'{{project}}'}</dt><dd>The project's folder name.</dd>
@@ -781,7 +800,10 @@
               </span>
               <textarea autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" rows="14" bind:value={config.ClaudePrompt}></textarea>
             </label>
-            <div><button class="btn-sm" onclick={() => config.ClaudePrompt = claudeDefaults.prompt}>Reset prompt to default</button></div>
+            <div>
+              <button class="btn-sm" onclick={() => config.ClaudePrompt = claudeDefaults.prompt}>Reset prompt to default</button>
+              {#if promptMerge}<button class="btn-sm" onclick={() => showMerge = true}>Merge with the new default…</button>{/if}
+            </div>
           </details>
         </div>
       </div>
@@ -849,6 +871,14 @@
                       </Explain></span></span>
                       <ListEditor label="Smoke-test paths for {name}" items={config.Projects[name].SmokePaths} onchange={v => config.Projects[name].SmokePaths = v} placeholder="/contact" emptyText="None" />
                     </div>
+                    <label>
+                      Multisite <span class="hint">off: drush runs for the site in <code>.drush_subsite</code>, or the default site · on: for every site ddev reaches, with <code>--uri</code></span>
+                      <select value={config.Projects[name].Multisite || ''} onchange={e => config.Projects[name].Multisite = e.currentTarget.value}>
+                        <option value="">Off{config.Defaults.Multisite === 'on' ? ' (defaults: on)' : ''}</option>
+                        <option value="off">Off, also when the defaults say on</option>
+                        <option value="on">On</option>
+                      </select>
+                    </label>
                     <label>
                       Dashboard project <span class="hint">only when its name differs from the folder name</span>
                       <select bind:value={config.Projects[name].DashboardProject}>

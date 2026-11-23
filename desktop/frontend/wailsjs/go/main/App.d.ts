@@ -33,6 +33,8 @@ export function GetConfig():Promise<config.Config>;
 
 export function GetConfigError():Promise<string>;
 
+export function GetPromptMerge():Promise<main.PromptMerge>;
+
 export function GetUpdate():Promise<updater.Release>;
 
 export function GetVersion():Promise<string>;
@@ -50,6 +52,8 @@ export function RefreshCore(arg1:string,arg2:boolean):Promise<coreupdates.Refres
 export function RefreshReleases():Promise<void>;
 
 export function RenameBranch(arg1:string,arg2:string):Promise<void>;
+
+export function ResolvePromptMerge(arg1:string):Promise<void>;
 
 export function RetryProjects(arg1:Array<string>):Promise<void>;
 

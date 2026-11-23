@@ -33,6 +33,8 @@ type pipe struct {
 	out         chan<- StatusUpdate
 	ddevStop    bool     // ddev was known to be stopped before the run, so it is stopped again afterwards
 	notes       []string // what the app did or found, added to the summary
+	sites       []site   // the sites drush and the checks run for; see findSites
+	multi       bool     // multisite on: problems and notes name their site
 }
 
 func (p *pipe) log(command, output string) {
@@ -162,18 +164,33 @@ func Run(ctx context.Context, projectName, projectPath, startBranch, tempBranch 
 		do("started ddev", 15*time.Minute, "ddev", "start")
 	}
 	do("ran ddev composer install", 20*time.Minute, "ddev", "composer", "install", "--no-interaction")
-	do("ran ddev drush deploy -y", 15*time.Minute, "ddev", "drush", "deploy", "-y")
+	multisite := proj.Multisite == "on"
+	found, skippedSites := findSites(ctx, p.cmd, p.path, multisite)
+	sitesInfo := sitesText(found, skippedSites, multisite)
+	p.sites, p.multi = found, multisite
+	if len(p.sites) == 0 {
+		p.sites = []site{{Dir: "default"}}
+	}
+	for _, s := range skippedSites {
+		p.notes = append(p.notes, "site skipped, pre-existing: "+s)
+	}
+	for _, s := range p.sites {
+		do("ran ddev drush deploy -y"+strings.TrimSuffix(" on "+s.label(p.multi), " "), 15*time.Minute, s.drush("deploy", "-y")...)
+	}
 	if ctx.Err() != nil {
 		p.finish("cancelled", "Cancelled")
 		return
 	}
 
 	// --- what is there to do? nothing = skipped, without starting Claude ---
-	list, known := "", false
+	list, known, hardening := "", false, ""
+	if issue := vendorHardeningIssue(p.path); issue != "" { // not an update, but it keeps the run from being skipped
+		hardening = "\n- drupal/core-vendor-hardening: " + issue
+	}
 	if setupFailed == nil {
 		var n int
 		list, n, known = p.outdated(proj.IgnoredPackages)
-		if known && n == 0 {
+		if known && n == 0 && hardening == "" {
 			p.cleanupDdev()
 			if err := Cleanup(p.path, p.start, p.temp); err != nil {
 				logging.Error("[%s] cleanup after skip: %v", p.name, err)
@@ -189,12 +206,15 @@ func Run(ctx context.Context, projectName, projectPath, startBranch, tempBranch 
 	if !known {
 		list = "(the app could not list them; find them yourself as described below)"
 	}
+	list = strings.TrimPrefix(list+hardening, "\n")
 
 	// --- baseline smoke test, while the site is as it was ---
-	var baseline smokeReport
+	baseline := map[string]smokeReport{}
 	if setupFailed == nil {
-		p.log("smoke test: baseline", "")
-		baseline = smoke(ctx, p.cmd, proj.SmokePaths)
+		for _, s := range p.sites {
+			p.log("smoke test: baseline "+s.label(p.multi), "")
+			baseline[s.Dir] = smoke(ctx, p.cmd, s, proj.SmokePaths)
+		}
 		writeJSON(filepath.Join(runDir, "baseline.json"), baseline)
 	}
 
@@ -208,7 +228,7 @@ func Run(ctx context.Context, projectName, projectPath, startBranch, tempBranch 
 		prev = "\nThe previous attempt on this project failed with:\n" + tail(string(b), 2000) + "\nAvoid repeating what went wrong.\n"
 	}
 	prompt := fillPrompt(claudeCfg.prompt, p.name, p.path, p.start, p.temp, resultFile,
-		"{{setup}}", setup, "{{update_list}}", list, "{{previous_failure}}", prev)
+		"{{setup}}", setup, "{{update_list}}", list, "{{previous_failure}}", prev, "{{sites}}", sitesInfo)
 	r, err := session(ctx, p.name, p.path, prompt, "update", out)
 	if done := p.sessionEnded(r, err); done {
 		return
@@ -231,7 +251,7 @@ func Run(ctx context.Context, projectName, projectPath, startBranch, tempBranch 
 		}
 		p.log(fmt.Sprintf("checks found %d problem(s), starting repair session %d", len(problems), round+1), "- "+strings.Join(problems, "\n- "))
 		prompt := fillPrompt(repairPrompt, p.name, p.path, p.start, p.temp, resultFile,
-			"{{previous_summary}}", summary, "{{problems}}", "- "+strings.Join(problems, "\n- "))
+			"{{previous_summary}}", summary, "{{problems}}", "- "+strings.Join(problems, "\n- "), "{{sites}}", sitesInfo)
 		r, err := session(ctx, p.name, p.path, prompt, fmt.Sprintf("repair %d", round+1), out)
 		if done := p.sessionEnded(r, err); done {
 			return
@@ -278,49 +298,59 @@ func (p *pipe) sessionEnded(r claudeResult, err error) bool {
 	return true
 }
 
-// verify runs drush updb and cex and checks the result; it returns what is wrong.
-func (p *pipe) verify(baseline smokeReport, compare bool) []string {
+// verify runs drush updb and cex per site and checks the result; it returns what is wrong.
+func (p *pipe) verify(baseline map[string]smokeReport, compare bool) []string {
 	var problems []string
-	if _, err := p.step(15*time.Minute, "ddev", "drush", "updb", "-y"); err != nil {
-		problems = append(problems, err.Error())
+	for _, s := range p.sites {
+		problems = append(problems, p.verifySite(s, baseline[s.Dir], compare)...)
 	}
-	if _, err := p.step(10*time.Minute, "ddev", "drush", "cex", "-y"); err != nil {
-		problems = append(problems, err.Error())
+	if len(problems) == 0 {
+		p.notes = append(p.notes, "drush updb and cex ran; no database updates or config changes pending")
 	}
-	if out, err := p.cmd(p.ctx, 5*time.Minute, "ddev", "drush", "updatedb:status", "--format=json"); err == nil && pending(out) {
-		problems = append(problems, "database updates are still pending after drush updb:\n"+tail(out, 1500))
+	return problems
+}
+
+func (p *pipe) verifySite(s site, baseline smokeReport, compare bool) []string {
+	var problems []string
+	at := s.label(p.multi)
+	add := func(msg string) { problems = append(problems, at+msg) }
+	if _, err := p.step(15*time.Minute, s.drush("updb", "-y")...); err != nil {
+		add(err.Error())
 	}
-	if out, err := p.cmd(p.ctx, 5*time.Minute, "ddev", "drush", "config:status", "--format=json"); err == nil && pending(out) {
-		problems = append(problems, "configuration differs from the exported config after drush cex:\n"+tail(out, 1500))
+	if _, err := p.step(10*time.Minute, s.drush("cex", "-y")...); err != nil {
+		add(err.Error())
 	}
-	p.log("smoke test: after the update", "")
-	after := smoke(p.ctx, p.cmd, config.ForProject(claudeCfg.projects.Project(p.name), p.path).SmokePaths)
+	if out, err := p.cmd(p.ctx, 5*time.Minute, s.drush("updatedb:status", "--format=json")...); err == nil && pending(out) {
+		add("database updates are still pending after drush updb:\n" + tail(out, 1500))
+	}
+	if out, err := p.cmd(p.ctx, 5*time.Minute, s.drush("config:status", "--format=json")...); err == nil && pending(out) {
+		add("configuration differs from the exported config after drush cex:\n" + tail(out, 1500))
+	}
+	p.log("smoke test: after the update "+at, "")
+	after := smoke(p.ctx, p.cmd, s, config.ForProject(claudeCfg.projects.Project(p.name), p.path).SmokePaths)
 	switch {
 	case after.Skipped != "":
-		p.notes = append(p.notes, "smoke test skipped: "+after.Skipped)
+		p.notes = append(p.notes, at+"smoke test skipped: "+after.Skipped)
 	case compare && baseline.Skipped == "":
 		broken, old := regressions(baseline, after)
 		for _, b := range broken {
-			problems = append(problems, "smoke test regression: "+b)
+			add("smoke test regression: " + b)
 		}
-		for _, e := range newErrors(p.ctx, p.cmd, baseline.LastErr) {
-			problems = append(problems, "new error in the Drupal log: "+e)
+		for _, e := range newErrors(p.ctx, p.cmd, s, baseline.LastErr) {
+			add("new error in the Drupal log: " + e)
 		}
 		if len(broken) == 0 {
-			p.notes = append(p.notes, fmt.Sprintf("smoke test: %d checks pass as before", len(after.Checks)-len(old)))
+			p.notes = append(p.notes, fmt.Sprintf("%ssmoke test: %d checks pass as before", at, len(after.Checks)-len(old)))
 		}
 		if len(old) > 0 {
-			p.notes = append(p.notes, "already failing before the update (not touched): "+strings.Join(old, ", "))
+			p.notes = append(p.notes, at+"already failing before the update (not touched): "+strings.Join(old, ", "))
 		}
 	default: // no baseline (a setup step failed): only what fails now
 		for _, c := range after.Checks {
 			if !c.OK {
-				problems = append(problems, "smoke test fails: "+strings.TrimSpace(c.Name+": "+c.Detail))
+				add("smoke test fails: " + strings.TrimSpace(c.Name+": "+c.Detail))
 			}
 		}
-	}
-	if len(problems) == 0 {
-		p.notes = append(p.notes, "drush updb and cex ran; no database updates or config changes pending")
 	}
 	return problems
 }
