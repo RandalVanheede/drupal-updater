@@ -6,6 +6,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-23
+### Added
+- Multisite per project (`multisite: on`, project settings): `drush deploy`, `updb`, `cex`, the pending checks and the smoke test run once per site ddev reaches, with `--uri`. Sites without a ddev hostname or that do not bootstrap are skipped and reported as pre-existing. Off (default): drush runs for the site in `.drush_subsite`, or the default site.
+- `{{sites}}` prompt placeholder: the sites the app runs for, with their URLs.
+- The built-in prompt makes sure `drupal/core-vendor-hardening` is installed, allowed and configured with the core files to remove; a project where it is missing is no longer skipped as up to date.
+- Desktop: when the built-in prompt changes, a custom `claude_prompt` is merged in a dialog: per difference yours, the new text or both, then an editable final version. A prompt set aside by 1.4 (`<config>.claude_prompt.bak`) is offered the same way once.
+
 ## [1.4.1] - 2026-11-18
 ### Added
 - Projects on github.com get a pull request through `gh` (`gh auth login`) instead of a GitLab merge request through `glab`; the pull request always goes to the `origin` repository the branch was pushed to.
