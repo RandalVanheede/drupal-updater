@@ -718,6 +718,10 @@
             <span>Excluded projects <span class="hint">folder names, <code>*</code> is a wildcard</span></span>
             <ListEditor label="Excluded projects" items={config.ExcludedProjects} onchange={v => config.ExcludedProjects = v} placeholder="sandbox*" emptyText="Nothing excluded" />
           </div>
+          <div class="field">
+            <span>Multisite <span class="hint">off: drush runs for the site in <code>.drush_subsite</code>, or the default site · on: for every site ddev reaches, with <code>--uri</code>. Project overrides win.</span></span>
+            <Seg label="Multisite" labelled={false} items={[['', 'Off'], ['on', 'On']]} value={config.Defaults.Multisite === 'on' ? 'on' : ''} onpick={v => config.Defaults.Multisite = v} />
+          </div>
           {#if previewCount !== null}
             <p class="hint preview" aria-live="polite">{previewCount === 0 ? 'No projects found with these settings.' : `These settings find ${previewCount} ${previewCount === 1 ? 'project' : 'projects'}.`}</p>
           {/if}
@@ -871,14 +875,12 @@
                       </Explain></span></span>
                       <ListEditor label="Smoke-test paths for {name}" items={config.Projects[name].SmokePaths} onchange={v => config.Projects[name].SmokePaths = v} placeholder="/contact" emptyText="None" />
                     </div>
-                    <label>
-                      Multisite <span class="hint">off: drush runs for the site in <code>.drush_subsite</code>, or the default site · on: for every site ddev reaches, with <code>--uri</code></span>
-                      <select value={config.Projects[name].Multisite || ''} onchange={e => config.Projects[name].Multisite = e.currentTarget.value}>
-                        <option value="">Off{config.Defaults.Multisite === 'on' ? ' (defaults: on)' : ''}</option>
-                        <option value="off">Off, also when the defaults say on</option>
-                        <option value="on">On</option>
-                      </select>
-                    </label>
+                    <div class="edit-field">
+                      <span>Multisite <span class="hint">follows the defaults ({config.Defaults.Multisite === 'on' ? 'on' : 'off'}) until you change it here</span></span>
+                      <Seg label="Multisite for {name}" labelled={false} items={[['off', 'Off'], ['on', 'On']]}
+                        value={config.Projects[name].Multisite || (config.Defaults.Multisite === 'on' ? 'on' : 'off')}
+                        onpick={v => config.Projects[name].Multisite = v === (config.Defaults.Multisite === 'on' ? 'on' : 'off') ? '' : v} />
+                    </div>
                     <label>
                       Dashboard project <span class="hint">only when its name differs from the folder name</span>
                       <select bind:value={config.Projects[name].DashboardProject}>

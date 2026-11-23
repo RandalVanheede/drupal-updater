@@ -132,6 +132,8 @@ func (cm *configModel) globalFields() []field {
 	add("Projects", "Max concurrent runs", g, s, field{})
 	g, s = str(&c.UpdateMode)
 	add("Projects", "Update mode", func() string { return orText(c.UpdateMode, "standard") }, s, field{options: []string{"standard", "disaster"}})
+	add("Projects", "Multisite", func() string { return orText(d.Multisite, "off") },
+		func(v string) { d.Multisite = strings.TrimSuffix(v, "off") }, field{options: []string{"off", "on"}})
 
 	g, s = str(&d.GitStartBranch)
 	add("Branch defaults", "Start branch", g, s, field{placeholder: "master|main"})
@@ -209,13 +211,12 @@ func (cm *configModel) projectFields(name string) []field {
 		str("Commit message", &pc.GitCommitMessage, inh.GitCommitMessage),
 		sl("Ignored packages", &pc.IgnoredPackages),
 		sl("Smoke-test paths", &pc.SmokePaths),
-		{label: "Multisite (on/off)", placeholder: orText(inh.Multisite, "off"),
-			get: func() string { return pc.Multisite },
+		{label: "Multisite", options: []string{"off", "on"}, // shows the defaults until set; stored only when it differs
+			get: func() string { return orText(pc.Multisite, orText(inh.Multisite, "off")) },
 			set: func(v string) {
-				if v = strings.ToLower(strings.TrimSpace(v)); v != "on" && v != "off" {
-					v = ""
+				if pc.Multisite = v; v == orText(inh.Multisite, "off") {
+					pc.Multisite = ""
 				}
-				pc.Multisite = v
 				save()
 			}},
 		{label: "Claude instructions", multi: true, placeholder: "none",
