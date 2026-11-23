@@ -6,6 +6,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-11-23
+### Added
+- Multisite is also a general setting (Settings → Projects, TUI Projects section), for every project unless a project overrides it.
+
+### Changed
+- A project's Multisite switch shows the general setting until it is changed there; a project stores its own value only when it differs.
+
 ## [1.5.0] - 2026-11-23
 ### Added
 - Multisite per project (`multisite: on`, project settings): `drush deploy`, `updb`, `cex`, the pending checks and the smoke test run once per site ddev reaches, with `--uri`. Sites without a ddev hostname or that do not bootstrap are skipped and reported as pre-existing. Off (default): drush runs for the site in `.drush_subsite`, or the default site.
