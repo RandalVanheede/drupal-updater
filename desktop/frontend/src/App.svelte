@@ -325,19 +325,21 @@
     try {
       if (force) await RefreshReleases();
       const queue = [...projects];
-      const found = {};
       let failed = 0;
       const worker = async () => {
         for (let p; (p = queue.shift()); refreshDone++) {
           try {
             const r = await RefreshCore(p.name, force);
-            if (r.version) found[p.name] = r.version;
             if (r.fetchFailed) failed++;
+            if (!r.version) continue;
+            p.core = r.version; // update the row now instead of after every project is done
+            if (!Object.hasOwn(coreStatus, r.version)) {
+              try { coreStatus = { ...coreStatus, ...((await CoreStatuses([r.version])) || {}) }; } catch {}
+            }
           } catch {}
         }
       };
       await Promise.all([worker(), worker(), worker(), worker()]);
-      projects.forEach(p => { if (found[p.name]) p.core = found[p.name]; }); // one pass, not one re-filter per project
       await updateStatuses();
       const notes = [];
       if (failed) notes.push(`${failed} ${failed === 1 ? 'project' : 'projects'} could not be fetched (offline?), versions may be old`);
