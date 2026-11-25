@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-11-25
+### Changed
+- Refresh updates each project's core version and status dot as soon as that project is done, instead of all at once at the end.
+
 ## [1.5.1] - 2026-11-23
 ### Added
 - Multisite is also a general setting (Settings → Projects, TUI Projects section), for every project unless a project overrides it.
